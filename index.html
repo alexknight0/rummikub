@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0e2f3a">
+  <title>Rummikub</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="hud">
+    <div id="players"></div>
+    <div id="pool" title="Tiles left in the pool"><span class="pool-stack"></span><span id="pool-count">0</span></div>
+    <button id="menu-btn" aria-label="Menu">☰</button>
+  </header>
+
+  <main id="board-wrap"><div id="board"></div></main>
+
+  <div id="controls">
+    <button id="undo" class="ctl" title="Undo last move" aria-label="Undo">
+      <svg viewBox="0 0 24 24"><path d="M9 7H4V2M4.5 7A8 8 0 1 1 4 13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="reset" class="ctl" title="Put everything back (reset turn)" aria-label="Reset turn">
+      <svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6M5.5 15a7.5 7.5 0 0 0 13 2.5M18.5 9a7.5 7.5 0 0 0-13-2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div id="status"></div>
+    <button id="sort-num" class="ctl sort" title="Sort: same numbers together">777</button>
+    <button id="sort-run" class="ctl sort" title="Sort: by colour, in order">789</button>
+    <button id="main-btn" class="ctl main"></button>
+  </div>
+
+  <section id="rack-wrap"><div id="rack"></div></section>
+
+  <div id="drag-layer"></div>
+  <div id="toast" hidden></div>
+
+  <div id="cover" hidden>
+    <div class="cover-box">
+      <p id="cover-title"></p>
+      <p class="muted">Pass the device. Tiles stay hidden until you tap.</p>
+      <button id="cover-btn" class="primary">Show my tiles</button>
+    </div>
+  </div>
+
+  <dialog id="setup">
+    <form id="setup-form" method="dialog">
+      <h2>New game</h2>
+      <div id="setup-players"></div>
+      <button type="button" id="add-player" class="link">+ Add player</button>
+      <label class="field">Turn timer
+        <select id="setup-timer">
+          <option value="0">Off</option>
+          <option value="30">30 seconds</option>
+          <option value="60">60 seconds</option>
+          <option value="90">90 seconds</option>
+          <option value="120">2 minutes</option>
+        </select>
+      </label>
+      <details>
+        <summary>Rules</summary>
+        <ul>
+          <li>Sets are <b>groups</b> (3–4 tiles, same number, different colours) or <b>runs</b> (3+ tiles in a row, same colour). 1 can't follow 13.</li>
+          <li>Your first play must be worth at least 30 points, using only tiles from your rack.</li>
+          <li>After that you can rearrange anything on the table, as long as every set is valid when you finish.</li>
+          <li>Tiles already on the table can't go back to your rack.</li>
+          <li>If you can't (or don't want to) play, draw a tile. First to empty their rack wins.</li>
+          <li>A joker stands in for any tile. Left in your rack at the end it costs 30.</li>
+        </ul>
+      </details>
+      <div class="row">
+        <button type="button" id="setup-cancel">Cancel</button>
+        <button type="submit" class="primary">Start</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="results">
+    <h2 id="results-title"></h2>
+    <table id="results-table"></table>
+    <div class="row">
+      <button type="button" id="results-new">New game…</button>
+      <button type="button" id="results-again" class="primary">Play again</button>
+    </div>
+  </dialog>
+
+  <script src="rules.js"></script>
+  <script src="ai.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
