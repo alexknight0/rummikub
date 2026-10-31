@@ -177,6 +177,7 @@ function updateCreateForm() {
   for (let i = 0; i < total; i++) ai.add(new Option(String(i), String(i)));
   ai.value = String(keep);
   $("#create-level-row").hidden = keep === 0;
+  $("#create-timer-row").hidden = total - keep < 2; // no timer when you're the only person
 }
 
 async function createGame() {
@@ -533,7 +534,7 @@ $("#room-lobby").onclick = () => {
 // Escape on the waiting room just closes it; reopen it from the lobby.
 $("#room").addEventListener("cancel", (e) => e.preventDefault());
 
-window.Online = { pageOpened, pageClosed, leaveView, play, draw, skip };
+window.Online = { pageOpened, pageClosed, leaveView, play, draw, skip, resignCurrent: () => cur?.g && resign({ id: cur.id, ...cur.g }) };
 
 let first = true;
 onAuthStateChanged(auth, (u) => {

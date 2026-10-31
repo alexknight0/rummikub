@@ -14,6 +14,9 @@
     <div id="players"></div>
     <div id="pool" title="Tiles left in the pool"><span class="pool-stack"></span><span id="pool-count">0</span></div>
     <button id="version" type="button" class="version" data-state="checking" aria-label="Checking for updates…" title="Checking for updates…"><i></i><span></span></button>
+    <button id="resign-btn" type="button" title="Resign this game" aria-label="Resign this game" hidden>
+      <svg viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
     <button id="menu-btn" aria-label="All games" title="All games">☰</button>
   </header>
 
@@ -50,7 +53,7 @@
       <h2>New game</h2>
       <div id="setup-players"></div>
       <button type="button" id="add-player" class="link">+ Add player</button>
-      <label class="field">Turn timer
+      <label class="field" id="setup-timer-row">Turn timer
         <select id="setup-timer">
           <option value="0">Off</option>
           <option value="30">30 seconds</option>
@@ -111,7 +114,7 @@
           <label class="field" id="create-level-row">Computer level
             <select id="create-level"><option value="hard">Hard</option><option value="easy">Easy</option></select>
           </label>
-          <label class="field">Turn timer
+          <label class="field" id="create-timer-row">Turn timer
             <select id="create-timer">
               <option value="0">Off</option>
               <option value="30">30 seconds</option>

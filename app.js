@@ -316,24 +316,38 @@ function tryMove(id, dest) {
   return true;
 }
 
-// Moves a whole table set so the grabbed tile (index idx) lands at dest.
-// Sets it would overlap or touch move out of the way.
+// Moves a group of tiles (a table set or neighbouring rack tiles) so the
+// grabbed tile (index idx) lands at dest. On the table, sets it would overlap
+// or touch move out of the way; in the rack, tiles shift along as usual.
 function tryMoveSet(ids, idx, dest) {
-  if (dest.area !== "board" || !isHumanTurn()) {
-    if (dest.area === "rack") toast("Drag tiles one at a time to put them back in your rack.");
+  const v = viewerIndex();
+  const rack = S.players[v].rack;
+  if (dest.area === "board" && !isHumanTurn()) {
+    toast(covered || busy ? "" : "Wait for your turn.");
     return false;
   }
-  const n = ids.length;
-  const r = dest.r;
-  const c = Math.max(0, Math.min(dest.c - idx, L.cols - n));
+  if (dest.area === "rack" && !ids.every((t) => t in rack || t in S.turnStart.rack)) {
+    toast("Tiles from the table can't go into your rack.");
+    return false;
+  }
   const before = snapshot();
-  for (const t of ids) delete S.board[t];
-  const blockers = getSets(S.board).filter((s) => s.r === r && s.c <= c + n && s.c + s.ids.length >= c);
-  for (const s of blockers) for (const t of s.ids) delete S.board[t];
-  ids.forEach((t, i) => { S.board[t] = [r, c + i]; });
-  for (const s of blockers) moveSetNear(s.ids, r, s.c);
-  if (JSON.stringify(S.board) === JSON.stringify(before.board)) return false;
-  S.history.push(before);
+  for (const t of ids) {
+    delete rack[t];
+    delete S.board[t];
+  }
+  if (dest.area === "rack") {
+    const start = Math.max(0, dest.slot - idx);
+    ids.forEach((t, k) => placeInRack(rack, t, start + k));
+  } else {
+    const n = ids.length;
+    const r = dest.r;
+    const c = Math.max(0, Math.min(dest.c - idx, L.cols - n));
+    const blockers = getSets(S.board).filter((s) => s.r === r && s.c <= c + n && s.c + s.ids.length >= c);
+    for (const s of blockers) for (const t of s.ids) delete S.board[t];
+    ids.forEach((t, i) => { S.board[t] = [r, c + i]; });
+    for (const s of blockers) moveSetNear(s.ids, r, s.c);
+  }
+  if (isHumanTurn()) S.history.push(before);
   save();
   return true;
 }
@@ -460,8 +474,11 @@ function startTurn() {
   if (p.type !== "human") later(runAI, 350);
 }
 
+// No timer when only one person is playing (the rest are computers).
+const timed = () => !!S.timer && humanCount() > 1;
+
 function armTimer() {
-  S.turnDeadline = S.timer ? Date.now() + S.timer * 1000 : null;
+  S.turnDeadline = timed() ? Date.now() + S.timer * 1000 : null;
 }
 
 function onMain() {
@@ -531,9 +548,44 @@ function humanDraw() {
 
 function endTurn() {
   if (!keys(cur().rack).length) return gameOver(S.turn);
-  if (S.passes >= S.players.length) return gameOver(null);
-  S.turn = (S.turn + 1) % S.players.length;
+  if (S.passes >= S.players.filter((p) => !p.resigned).length) return gameOver(null);
+  S.turn = nextLocalSeat(S.turn);
   startTurn();
+}
+
+function nextLocalSeat(from) {
+  let i = from;
+  do i = (i + 1) % S.players.length; while (S.players[i].resigned && i !== from);
+  return i;
+}
+
+// Resign on this device: the player whose rack is showing is out. The game
+// ends if nobody (or only computers) would be left to play.
+function resignLocal() {
+  const pi = viewerIndex();
+  if (!S || S.online || S.over || pi < 0) return;
+  const p = S.players[pi];
+  const left = S.players.map((q, i) => i).filter((i) => i !== pi && !S.players[i].resigned);
+  const msg = left.length > 1 && left.some((i) => S.players[i].type === "human")
+    ? `Resign, ${p.name}? You'll be out and the others carry on.`
+    : `Resign this game? ${left.length === 1 ? S.players[left[0]].name + " wins." : "The computer with the fewest tiles wins."}`;
+  if (!confirm(msg)) return;
+  closeHome();
+  cancelDrag();
+  if (S.turn === pi) revertTurn();
+  p.resigned = true;
+  if (left.length === 1 || !left.some((i) => S.players[i].type === "human")) {
+    const winner = left.reduce((a, b) => (keys(S.players[b].rack).length < keys(S.players[a].rack).length ? b : a));
+    return gameOver(winner);
+  }
+  if (S.turn === pi) {
+    gameToken++;
+    S.turn = nextLocalSeat(pi);
+    startTurn();
+  } else {
+    save();
+    render();
+  }
 }
 
 function onTimeout() {
@@ -550,7 +602,10 @@ function onTimeout() {
 
 function gameOver(winner) {
   const vals = S.players.map((p) => keys(p.rack).reduce((a, id) => a + rackValue(tile(id)), 0));
-  if (winner === null) winner = vals.indexOf(Math.min(...vals));
+  if (winner === null) {
+    const inGame = S.players.map((p, i) => i).filter((i) => !S.players[i].resigned);
+    winner = inGame.reduce((a, b) => (vals[b] < vals[a] ? b : a));
+  }
   const scores = vals.map((v) => -(v - vals[winner]));
   scores[winner] = -scores.reduce((a, b) => a + b, 0);
   S.over = { winner, vals, scores };
@@ -796,7 +851,7 @@ function applyRemote(id, g, hand, me) {
   };
   S.turnStart = { board: clone(board), rack: S.turn === me.seat ? clone(rack) : {} };
   S.history = [];
-  S.turnDeadline = !S.over && S.timer ? Date.now() + S.timer * 1000 : null;
+  S.turnDeadline = !S.over && timed() ? Date.now() + S.timer * 1000 : null;
   busy = false;
   if (!same) buildChips();
   save();
@@ -1088,6 +1143,8 @@ function renderHUD() {
   main.title = placed ? "Finish turn" : poolLeft() ? "Draw a tile and end your turn" : "Pass";
   main.innerHTML = placed ? "✓" : poolLeft() ? '<span class="main-draw">+<i></i></span>' : "Pass";
   renderStatus();
+  const me = S.players[viewerIndex()];
+  $("#resign-btn").hidden = !!S.over || covered || !me || me.type !== "human" || !!me.resigned;
   tick();
 }
 
@@ -1179,11 +1236,32 @@ function showHint(dest) {
   const [parent, w, h] = board ? [boardEl, L.cw, L.ch] : [rackEl, L.rw, L.rh];
   let [x, y] = board ? [dest.c * w, dest.r * h] : [(dest.slot % L.rackCols) * w, Math.floor(dest.slot / L.rackCols) * h];
   if (board && n > 1) x = Math.max(0, Math.min(dest.c - drag.idx, L.cols - n)) * w;
+  if (!board && n > 1) x = Math.max(0, dest.slot - drag.idx) % L.rackCols * w;
   if (hint.parentNode !== parent) parent.appendChild(hint);
-  Object.assign(hint.style, { left: x + 1 + "px", top: y + 1 + "px", width: (board ? n : 1) * w - 2 + "px", height: h - 2 + "px" });
+  Object.assign(hint.style, { left: x + 1 + "px", top: y + 1 + "px", width: n * w - 2 + "px", height: h - 2 + "px" });
 }
 
 const LONG_PRESS_MS = 380;
+// How far a finger can wobble while holding before it counts as a drag. A real
+// thumb moves a few pixels, so touch needs more slack than a mouse.
+const dragSlop = (e) => (e.pointerType === "mouse" ? 5 : 14);
+
+// The tiles that move together with `id` on a long press: its set on the
+// table, or the tiles next to it in the same rack row.
+function groupOf(id) {
+  if (id in S.board) return getSets(S.board).find((s) => s.ids.includes(id)).ids;
+  const rack = S.players[viewerIndex()].rack;
+  const bySlot = new Map(keys(rack).map((t) => [rack[t], t]));
+  const slot = rack[id];
+  const rowStart = slot - (slot % L.rackCols);
+  let a = slot;
+  let z = slot;
+  while (a - 1 >= rowStart && bySlot.has(a - 1)) a--;
+  while (z + 1 < rowStart + L.rackCols && bySlot.has(z + 1)) z++;
+  const ids = [];
+  for (let s = a; s <= z; s++) ids.push(bySlot.get(s));
+  return ids;
+}
 
 function onPointerDown(e) {
   if (drag || e.button > 0) return;
@@ -1197,21 +1275,19 @@ function onPointerDown(e) {
   }
   e.preventDefault();
   const r = el.getBoundingClientRect();
-  drag = { id, ids: [id], idx: 0, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
-  // Holding still on a table tile picks up its whole set.
-  if (id in S.board) {
-    const set = getSets(S.board).find((s) => s.ids.includes(id));
-    if (set.ids.length > 1 && set.ids.every(canDrag)) {
-      const d = drag;
-      d.timer = setTimeout(() => {
-        if (drag !== d || d.active) return;
-        d.ids = set.ids;
-        d.idx = set.ids.indexOf(id);
-        navigator.vibrate?.(15);
-        activateDrag();
-        moveDrag();
-      }, LONG_PRESS_MS);
-    }
+  drag = { id, ids: [id], idx: 0, pointerId: e.pointerId, slop: dragSlop(e), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
+  // Holding still picks up the whole set (on the table or in the rack).
+  const group = groupOf(id);
+  if (group.length > 1 && group.every(canDrag)) {
+    const d = drag;
+    d.timer = setTimeout(() => {
+      if (drag !== d || d.active) return;
+      d.ids = group;
+      d.idx = group.indexOf(id);
+      navigator.vibrate?.(15);
+      activateDrag();
+      moveDrag();
+    }, LONG_PRESS_MS);
   }
 }
 
@@ -1234,7 +1310,7 @@ function onPointerMove(e) {
   drag.x = e.clientX;
   drag.y = e.clientY;
   if (!drag.active) {
-    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) return;
+    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < drag.slop) return;
     activateDrag();
   }
   moveDrag();
@@ -1327,6 +1403,10 @@ function renderLocalGames() {
     const who = g.players[g.turn];
     const sub = who.type === "human" ? `${who.name}'s turn` : `${who.name} is playing`;
     ul.appendChild(row(g.players.map((p) => p.name).join(" vs "), sub, [
+      ["Resign", () => {
+        if (!showing) { closeHome(); resumeLocal(g); }
+        resignLocal();
+      }, "danger"],
       ["New", () => openSetup()],
       ["Open", () => (showing ? closeHome() : (closeHome(), resumeLocal(g))), "primary"],
     ], showing ? "current" : ""));
@@ -1357,11 +1437,15 @@ function addPlayerRow(p) {
   row.querySelector("input").value = p.name;
   row.querySelector("select").value = p.type;
   row.querySelector(".rm").onclick = () => { row.remove(); updateSetupButtons(); };
+  row.querySelector("select").onchange = updateSetupButtons;
   $("#setup-players").appendChild(row);
 }
 
 function updateSetupButtons() {
   const n = $("#setup-players").children.length;
+  // Games against the computer have no turn timer.
+  const humans = [...document.querySelectorAll("#setup-players select")].filter((s) => s.value === "human").length;
+  $("#setup-timer-row").hidden = humans < 2;
   $("#add-player").hidden = n >= 4;
   for (const b of document.querySelectorAll("#setup-players .rm")) b.style.visibility = n > 2 ? "" : "hidden";
 }
@@ -1411,6 +1495,7 @@ function init() {
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
   $("#menu-btn").onclick = openHome;
+  $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
   $("#page-back").onclick = closeHome;
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
