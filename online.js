@@ -18,8 +18,11 @@
 // tools; that's accepted for games among friends.
 //
 // Uses globals from app.js: S, applyRemote, onlineResults, resumeLocal,
-// loadLocalGame, openHome, toast, requestAIMove, aiMoveIsLegal, layoutSets,
-// shuffle, keys, makeDeck, AI_MIN_THINK_MS, MODE_KEY.
+// loadLocalGame, openHome, closeHome, pageOpen, row, toast, requestAIMove,
+// aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, AI_MIN_THINK_MS, MODE_KEY.
+//
+// A player who resigns keeps their seat with seats[i].resigned = true; turns
+// skip them, and the game ends when one player (or no person) is left.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
@@ -93,19 +96,19 @@ function renderAccount() {
   box.append(name, out);
 }
 
-// ---------------------------------------------------------------- lobby
+// ---------------------------------------------------------------- games page (online part)
 
-function openLobby() {
-  for (const d of ["#home", "#results", "#room"]) if ($(d).open) $(d).close();
+function pageOpened() {
   renderAccount();
   $("#create-form").hidden = true;
-  if (!$("#lobby").open) $("#lobby").showModal();
   subscribeLobby();
 }
 
+const pageClosed = () => unsubscribeLobby();
+
 function subscribeLobby() {
   unsubscribeLobby();
-  if (!user || !$("#lobby").open) return;
+  if (!user || !pageOpen()) return;
   // Don't show lists from the last time the lobby was open.
   lobbyData = { open: null, mine: null };
   $("#my-games-wrap").hidden = true;
@@ -131,18 +134,6 @@ function describe(g) {
   return bits.join(" · ");
 }
 
-function gameRow(g, label, sub, action) {
-  const li = document.createElement("li");
-  li.className = "game-row";
-  li.innerHTML = '<div><b></b><small></small></div><button type="button"></button>';
-  li.querySelector("b").textContent = label;
-  li.querySelector("small").textContent = sub;
-  const btn = li.querySelector("button");
-  btn.textContent = action;
-  btn.className = action === "Join" ? "primary" : "";
-  btn.onclick = () => (action === "Join" ? joinGame(g.id) : enterGame(g.id));
-  return li;
-}
 
 function renderLobby() {
   if (!lobbyData.open || !lobbyData.mine) return; // wait for both lists
@@ -155,17 +146,25 @@ function renderLobby() {
     .filter((g) => g.status !== "over" || now - g.updated < LOBBY_MAX_AGE_MS)
     .sort((a, b) => b.updated - a.updated);
   for (const g of mine) {
+    const meIn = g.seats.find((s) => s.uid === user.uid);
+    const yours = g.status === "playing" && g.seats[g.turn]?.uid === user.uid;
     let sub;
     if (g.status === "open") sub = `Waiting to start · ${describe(g)}`;
-    else if (g.status === "over") sub = "Finished";
-    else sub = g.seats[g.turn]?.uid === user.uid ? "Your turn" : `${g.seats[g.turn]?.name}'s turn`;
-    mineBox.appendChild(gameRow(g, `${g.hostName}'s game`, sub, "Open"));
+    else if (g.status === "over") sub = g.over?.winner != null ? `Finished · ${g.seats[g.over.winner].name} won` : "Finished";
+    else if (meIn?.resigned) sub = "You resigned";
+    else sub = yours ? "Your turn" : `${g.seats[g.turn]?.name}'s turn`;
+    const others = g.seats.filter((s) => s.uid !== user.uid).map((s) => s.name || "?").join(", ");
+    const buttons = [];
+    if (g.status === "playing" && !meIn?.resigned) buttons.push(["Resign", () => resign(g), "danger"]);
+    buttons.push(["Open", () => enterGame(g.id), "primary"]);
+    const cls = (S?.online?.id === g.id || cur?.id === g.id ? "current " : "") + (yours ? "yours" : "");
+    mineBox.appendChild(row(`vs ${others || "nobody yet"}`, sub, buttons, cls));
   }
   const open = lobbyData.open
     .filter((g) => !g.playerUids.includes(user.uid) && now - g.created < LOBBY_MAX_AGE_MS)
     .filter((g) => g.seats.some((s) => s.type === "human" && !s.uid))
     .sort((a, b) => b.created - a.created);
-  for (const g of open) openBox.appendChild(gameRow(g, `${g.hostName}'s game`, describe(g), "Join"));
+  for (const g of open) openBox.appendChild(row(`${g.hostName}'s game`, describe(g), [["Join", () => joinGame(g.id), "primary"]]));
   $("#my-games-wrap").hidden = !mine.length;
   if (!open.length) openBox.innerHTML = '<li class="empty">No open games right now. Create one and ask a friend to join.</li>';
 }
@@ -242,8 +241,7 @@ function renderRoom(g) {
   $("#room-note").textContent = isHost
     ? filled < 2 ? "Others can join from Play online → Open games." : "Start whenever you're ready. Empty seats are dropped."
     : "Waiting for the host to start…";
-  for (const d of ["#lobby", "#home", "#results"]) if ($(d).open) $(d).close();
-  if (!$("#room").open) $("#room").showModal();
+  if (!$("#room").open && !pageOpen()) $("#room").showModal();
 }
 
 async function startGame() {
@@ -289,16 +287,50 @@ async function leaveRoom() {
     console.warn(e);
   }
   leaveView();
-  openLobby();
+  openHome();
+}
+
+async function resign(g) {
+  const others = g.seats.filter((s) => s.uid !== user.uid && !s.resigned);
+  const msg = others.length > 1
+    ? "Resign this game? You'll be out, and the others carry on without you."
+    : `Resign this game? ${others[0]?.name ?? "The other player"} wins.`;
+  if (!confirm(msg)) return;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(gameRef(g.id));
+      if (!snap.exists()) return;
+      const d = snap.data();
+      const seat = d.seats.findIndex((s) => s.uid === user.uid);
+      if (d.status !== "playing" || seat < 0 || d.seats[seat].resigned) return;
+      const seats = d.seats.map((s, i) => (i === seat ? { ...s, resigned: true } : s));
+      const upd = { seats, moveNo: d.moveNo + 1, lastMove: { seat, kind: "resign" }, lastPlaced: [], updated: Date.now() };
+      const left = seats.map((s, i) => i).filter((i) => !seats[i].resigned);
+      if (left.length === 1 || !left.some((i) => seats[i].type === "human")) {
+        // Last one in wins; if only computers are left, the one with the fewest tiles.
+        const winner = left.reduce((a, b) => (d.counts[b] < d.counts[a] ? b : a));
+        Object.assign(upd, { status: "over", over: { winner } });
+      } else if (d.turn === seat) upd.turn = nextSeat(seats, seat);
+      tx.update(gameRef(g.id), upd);
+    });
+    toast("You resigned.");
+  } catch (e) {
+    console.warn(e);
+    toast("Couldn't resign. Check your connection.");
+  }
 }
 
 // ---------------------------------------------------------------- following a game
 
 function enterGame(id) {
+  closeHome();
+  if (cur?.id === id) { // already following it
+    if (cur.g?.status === "open") renderRoom(cur.g);
+    return;
+  }
   leaveView();
   localStorage.setItem(GAME_KEY, id);
   localStorage.setItem(MODE_KEY, "online");
-  if ($("#lobby").open) $("#lobby").close();
   cur = { id, g: null, hand: null, seat: -1, unsubs: [] };
   const mine = cur;
   cur.unsubs.push(onSnapshot(gameRef(id), (snap) => {
@@ -306,14 +338,14 @@ function enterGame(id) {
     if (!snap.exists()) {
       toast("The host cancelled that game.");
       leaveView();
-      return openLobby();
+      return openHome();
     }
     const g = snap.data();
     cur.g = g;
     cur.seat = g.seats.findIndex((s) => s.uid === user.uid);
     if (cur.seat < 0) {
       leaveView();
-      return openLobby();
+      return openHome();
     }
     if (g.status === "open") return renderRoom(g);
     if ($("#room").open) $("#room").close();
@@ -366,9 +398,16 @@ async function fetchResults(id, g) {
 
 // ---------------------------------------------------------------- moves
 
+// The next seat after `from` that hasn't resigned.
+function nextSeat(seats, from) {
+  let i = from;
+  do i = (i + 1) % seats.length; while (seats[i].resigned && i !== from);
+  return i;
+}
+
 // The game update for a finished turn. Tile ids and board are this move's.
 function nextState(g, seat, kind, { board, count, placed, poolCount } = {}) {
-  const n = g.seats.length;
+  const n = g.seats.filter((s) => !s.resigned).length;
   const counts = g.counts.slice();
   if (count !== undefined) counts[seat] = count;
   const melded = g.melded.slice();
@@ -376,7 +415,7 @@ function nextState(g, seat, kind, { board, count, placed, poolCount } = {}) {
   const passes = kind === "pass" || kind === "skip" ? g.passes + 1 : 0;
   const upd = {
     counts, melded, passes, lastMove: { seat, kind }, lastPlaced: placed || [],
-    moveNo: g.moveNo + 1, turn: (g.turn + 1) % n, updated: Date.now(),
+    moveNo: g.moveNo + 1, turn: nextSeat(g.seats, g.turn), updated: Date.now(),
   };
   if (board) upd.board = board;
   if (poolCount !== undefined) upd.poolCount = poolCount;
@@ -440,8 +479,8 @@ async function skip(moveNo) {
 function scheduleAI(g) {
   clearTimeout(aiTimer);
   if (g.status !== "playing" || g.seats[g.turn].type === "human") return;
-  const humans = g.seats.map((s, i) => (s.type === "human" ? i : -1)).filter((i) => i >= 0);
-  const rank = Math.max(0, humans.indexOf(cur.seat));
+  const humans = g.seats.map((s, i) => (s.type === "human" && !s.resigned ? i : -1)).filter((i) => i >= 0);
+  const rank = humans.includes(cur.seat) ? humans.indexOf(cur.seat) : humans.length; // resigned players are the last backup
   const { id } = cur;
   const moveNo = g.moveNo;
   aiTimer = setTimeout(() => runAITurn(id, moveNo).catch((e) => e.message !== "stale" && console.warn(e)), rank * AI_BACKUP_DELAY_MS);
@@ -475,8 +514,6 @@ async function runAITurn(id, moveNo) {
 // ---------------------------------------------------------------- wiring
 
 $("#signin").onclick = signIn;
-$("#lobby-close").onclick = () => $("#lobby").close();
-$("#lobby").addEventListener("close", unsubscribeLobby);
 $("#create-open").onclick = () => {
   $("#create-form").hidden = !$("#create-form").hidden;
   updateCreateForm();
@@ -491,12 +528,12 @@ $("#room-start").onclick = startGame;
 $("#room-leave").onclick = leaveRoom;
 $("#room-lobby").onclick = () => {
   $("#room").close();
-  openLobby();
+  openHome();
 };
 // Escape on the waiting room just closes it; reopen it from the lobby.
 $("#room").addEventListener("cancel", (e) => e.preventDefault());
 
-window.Online = { openLobby, leaveView, play, draw, skip };
+window.Online = { pageOpened, pageClosed, leaveView, play, draw, skip };
 
 let first = true;
 onAuthStateChanged(auth, (u) => {
@@ -510,12 +547,11 @@ onAuthStateChanged(auth, (u) => {
       if (u && id) enterGame(id);
       else {
         const saved = loadLocalGame();
-        if (saved) resumeLocal(saved);
+        if (saved && u) resumeLocal(saved);
         else openHome();
-        if (!u) openLobby();
       }
     }
   }
-  if ($("#lobby").open) subscribeLobby();
+  if (pageOpen()) subscribeLobby();
   if (!u && cur) leaveView();
 });

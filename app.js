@@ -95,6 +95,7 @@ function newGame(settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   localStorage.setItem(MODE_KEY, "local");
   window.Online?.leaveView();
+  closeHome();
   gameToken++;
   busy = false;
   thinking = null;
@@ -783,6 +784,7 @@ function applyRemote(id, g, hand, me) {
       rack: i === me.seat ? rack : {},
       count: i === me.seat ? undefined : g.counts[i],
       melded: g.melded[i],
+      resigned: !!s.resigned,
     })),
     turn: g.turn,
     timer: g.timer,
@@ -808,7 +810,11 @@ function onlineResults(hands) {
   if (!S?.online || !S.over) return;
   const vals = hands.map((h) => h.reduce((a, id) => a + rackValue(tile(id)), 0));
   let winner = S.over.winner;
-  if (winner === null) winner = vals.indexOf(Math.min(...vals));
+  if (winner === null) {
+    // Blocked game: lowest rack among the players still in wins.
+    const inGame = S.players.map((p, i) => i).filter((i) => !S.players[i].resigned);
+    winner = inGame.reduce((a, b) => (vals[b] < vals[a] ? b : a));
+  }
   const scores = vals.map((v) => -(v - vals[winner]));
   scores[winner] = -scores.reduce((a, b) => a + b, 0);
   S.over = { winner, vals, scores, left: hands.map((h) => h.length) };
@@ -1064,7 +1070,8 @@ function renderHUD() {
     chip.classList.toggle("active", i === S.turn && !S.over);
     const sub = chip.querySelector(".chip-sub");
     const n = rackCount(p);
-    sub.textContent = `${n} tile${n === 1 ? "" : "s"}${p.type === "human" ? "" : " · AI"}`;
+    sub.textContent = p.resigned ? "Resigned" : `${n} tile${n === 1 ? "" : "s"}${p.type === "human" ? "" : " · AI"}`;
+    chip.classList.toggle("out", !!p.resigned);
     sub.classList.toggle("dots", thinking === i || (!!S.online && i === S.turn && !S.over && p.type !== "human"));
   });
   $("#pool-count").textContent = poolLeft();
@@ -1273,6 +1280,61 @@ function cancelDrag() {
   if (drag) finishDrag(false);
 }
 
+// ---------------------------------------------------------------- games page
+
+const gamesPage = $("#games-page");
+const pageOpen = () => !gamesPage.hidden;
+
+// The full-screen list of games (this device's game and online games).
+function openHome() {
+  for (const d of ["#results", "#room"]) if ($(d).open) $(d).close();
+  cancelDrag();
+  gamesPage.hidden = false;
+  $("#page-back").hidden = !S;
+  renderLocalGames();
+  window.Online?.pageOpened();
+}
+
+function closeHome() {
+  if (gamesPage.hidden) return;
+  gamesPage.hidden = true;
+  window.Online?.pageClosed();
+}
+
+function row(label, sub, buttons, cls = "") {
+  const li = document.createElement("li");
+  li.className = "game-row " + cls;
+  li.innerHTML = '<div><b></b><small></small></div><div class="btns"></div>';
+  li.querySelector("b").textContent = label;
+  li.querySelector("small").textContent = sub;
+  for (const [text, fn, kind] of buttons) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = text;
+    if (kind) b.className = kind;
+    b.onclick = fn;
+    li.querySelector(".btns").appendChild(b);
+  }
+  return li;
+}
+
+function renderLocalGames() {
+  const ul = $("#local-games");
+  ul.innerHTML = "";
+  const g = S && !S.online ? S : loadLocalGame();
+  const showing = !!S && !S.online;
+  if (g && !g.over) {
+    const who = g.players[g.turn];
+    const sub = who.type === "human" ? `${who.name}'s turn` : `${who.name} is playing`;
+    ul.appendChild(row(g.players.map((p) => p.name).join(" vs "), sub, [
+      ["New", () => openSetup()],
+      ["Open", () => (showing ? closeHome() : (closeHome(), resumeLocal(g))), "primary"],
+    ], showing ? "current" : ""));
+  } else {
+    ul.appendChild(row("Play against the computer", "Or pass the phone around", [["New game", () => openSetup(), "primary"]]));
+  }
+}
+
 // ---------------------------------------------------------------- dialogs
 
 function openSetup() {
@@ -1324,24 +1386,12 @@ function showResults() {
     if (i === o.winner) tr.className = "win";
     const left = o.left ? o.left[i] : keys(S.players[i].rack).length;
     tr.innerHTML = `<td></td><td>${left} tile${left === 1 ? "" : "s"} left (${o.vals[i]})</td><td>${o.scores[i] > 0 ? "+" : ""}${o.scores[i]}</td>`;
-    tr.firstChild.textContent = S.players[i].name;
+    tr.firstChild.textContent = S.players[i].name + (S.players[i].resigned ? " (resigned)" : "");
     $("#results-table").appendChild(tr);
   }
   $("#results-again").hidden = !!S.online;
-  $("#results-new").textContent = S.online ? "Back to lobby" : "New game…";
+  $("#results-new").textContent = S.online ? "All games" : "New game…";
   if (!$("#results").open) $("#results").showModal();
-}
-
-function openHome() {
-  $("#home-resume").hidden = !S;
-  $("#home").showModal();
-}
-
-// "Play on this device": back to the local game, or set one up.
-function goLocal() {
-  const saved = loadLocalGame();
-  if (saved && !saved.over) resumeLocal(saved);
-  else openSetup();
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1361,20 +1411,14 @@ function init() {
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
   $("#menu-btn").onclick = openHome;
-  $("#home-resume").onclick = () => $("#home").close();
-  $("#home-local").onclick = () => { $("#home").close(); goLocal(); };
-  $("#home-online").onclick = () => {
-    $("#home").close();
-    if (window.Online) Online.openLobby();
-    else toast("Online play couldn't load. Check your connection.");
-  };
+  $("#page-back").onclick = closeHome;
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
   $("#results-again").onclick = () => { $("#results").close(); newGame(S.settings); };
   $("#results-new").onclick = () => {
     $("#results").close();
-    if (S.online) Online.openLobby();
+    if (S.online) openHome();
     else openSetup();
   };
   $("#cover-btn").onclick = () => {
