@@ -362,6 +362,32 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 #results-table td:last-child { text-align: right; font-weight: 700; }
 #results-table tr.win td { color: var(--accent); }
 
+.avatar span { position: relative; overflow: hidden; }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.home-buttons { display: flex; flex-direction: column; gap: 10px; }
+.home-buttons button { padding: 12px 14px; border-radius: 12px; background: rgba(255, 255, 255, .08); font-weight: 600; text-align: left; }
+.home-buttons .big { font-size: 17px; }
+.home-buttons small { display: block; font-weight: 400; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.home-buttons .primary small { color: rgba(255, 255, 255, .85); }
+
+.lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.lobby-head h2 { margin: 0; }
+#account { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+#account img { width: 26px; height: 26px; border-radius: 50%; }
+#lobby h3 { font-size: 14px; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
+.wide { width: 100%; padding: 11px; }
+#create-form { margin-top: 8px; padding: 4px 12px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
+.games { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.game-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
+.game-row b { display: block; }
+.game-row small { color: var(--muted); }
+.game-row button { padding: 7px 14px; border-radius: 9px; background: rgba(255, 255, 255, .12); font-weight: 600; flex: none; }
+.games .empty { color: var(--muted); font-size: 14px; padding: 4px 2px; }
+#room-seats { padding-left: 20px; }
+#room-seats li { margin: 4px 0; }
+#room .row button:disabled { opacity: .4; }
+
 /* ---------- landscape phone: players left, buttons right (like the app) ---------- */
 
 @media (orientation: landscape) and (max-height: 500px) {

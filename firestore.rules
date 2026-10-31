@@ -1,0 +1,41 @@
+rules_version = '2';
+// Rummikub online play. Source of truth; deploy with the REST steps in the
+// rummikub skill after every edit. Data layout is described in online.js.
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function game(g) { return get(/databases/$(db)/documents/games/$(g)).data; }
+    function isPlayer(g) { return signedIn() && request.auth.uid in game(g).playerUids; }
+
+    match /games/{g} {
+      // Anyone signed in sees the lobby and the public table.
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.host == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.playerUids == [request.auth.uid];
+      // Players update the game as it's played. Anyone else may only join an
+      // open game: add themselves to playerUids and take a seat.
+      allow update: if signedIn() && (
+        request.auth.uid in resource.data.playerUids
+        || (resource.data.status == 'open'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seats', 'playerUids', 'updated'])
+          && request.resource.data.playerUids.hasAll(resource.data.playerUids)
+          && request.resource.data.playerUids.size() == resource.data.playerUids.size() + 1
+          && request.auth.uid in request.resource.data.playerUids));
+      allow delete: if signedIn() && resource.data.host == request.auth.uid;
+
+      // A person's hand is private until the game ends. Computer hands ("ai<seat>")
+      // are shared so any player's device can play the computer's turn.
+      match /hands/{h} {
+        allow read: if isPlayer(g) && (h == request.auth.uid || h.matches('ai[0-9]') || game(g).status == 'over');
+        allow create: if signedIn() && game(g).host == request.auth.uid;
+        allow update: if isPlayer(g) && (h == request.auth.uid || h.matches('ai[0-9]'));
+      }
+
+      match /secret/{s} {
+        allow read, write: if isPlayer(g);
+      }
+    }
+  }
+}

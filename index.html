@@ -86,9 +86,67 @@
     </div>
   </dialog>
 
+  <dialog id="home">
+    <h2>Rummikub</h2>
+    <div class="home-buttons">
+      <button type="button" id="home-resume">Back to game</button>
+      <button type="button" id="home-local" class="big">Play on this device<small>Against the computer, or pass the phone around</small></button>
+      <button type="button" id="home-online" class="big primary">Play online<small>Sign in with Google and join friends' games</small></button>
+    </div>
+  </dialog>
+
+  <dialog id="lobby">
+    <div class="lobby-head"><h2>Play online</h2><div id="account"></div></div>
+    <div id="lobby-signin">
+      <p class="muted">Sign in to create a game or join one.</p>
+      <button type="button" id="signin" class="primary">Sign in with Google</button>
+    </div>
+    <div id="lobby-body" hidden>
+      <button type="button" id="create-open" class="primary wide">+ Create game</button>
+      <form id="create-form" hidden>
+        <label class="field">Players
+          <select id="create-players"><option>2</option><option>3</option><option>4</option></select>
+        </label>
+        <label class="field">Computer players <select id="create-ai"><option>0</option></select></label>
+        <label class="field" id="create-level-row">Computer level
+          <select id="create-level"><option value="hard">Hard</option><option value="easy">Easy</option></select>
+        </label>
+        <label class="field">Turn timer
+          <select id="create-timer">
+            <option value="0">Off</option>
+            <option value="30">30 seconds</option>
+            <option value="60" selected>60 seconds</option>
+            <option value="90">90 seconds</option>
+            <option value="120">2 minutes</option>
+          </select>
+        </label>
+        <div class="row"><button type="submit" class="primary">Create</button></div>
+      </form>
+      <div id="my-games-wrap" hidden>
+        <h3>Your games</h3>
+        <ul id="my-games" class="games"></ul>
+      </div>
+      <h3>Open games</h3>
+      <ul id="open-games" class="games"></ul>
+    </div>
+    <div class="row"><button type="button" id="lobby-close">Close</button></div>
+  </dialog>
+
+  <dialog id="room">
+    <h2 id="room-title"></h2>
+    <ul id="room-seats"></ul>
+    <p id="room-note" class="muted"></p>
+    <div class="row">
+      <button type="button" id="room-leave">Leave</button>
+      <button type="button" id="room-lobby">Lobby</button>
+      <button type="button" id="room-start" class="primary">Start</button>
+    </div>
+  </dialog>
+
   <script src="version.js"></script>
   <script src="rules.js"></script>
   <script src="ai.js"></script>
   <script src="app.js"></script>
+  <script type="module" src="online.js"></script>
 </body>
 </html>

@@ -7,6 +7,11 @@
 //   players[i] = {name, type: "human"|"easy"|"hard", rack: {id: slot}, melded}
 //   turnStart = {board, rack} at the start of the current turn (for reset and rules)
 //   history = undo stack of {board, rack}
+//
+// Online games (online.js) use the same S, built from Firestore by applyRemote():
+// S.online = {id, seat, moveNo}; only this device's rack is known, other players
+// have p.count instead, and S.poolCount replaces S.pool. Turns are sent with
+// Online.play / Online.draw rather than the local turn loop.
 
 const SAVE_KEY = "rummikub:game";
 const SETTINGS_KEY = "rummikub:settings";
@@ -35,7 +40,7 @@ let drag = null;
 let gameToken = 0; // bumped on every new game so stale timeouts do nothing
 let worker = null;
 let aiReq = 0;
-let aiPending = null;
+const aiPending = new Map(); // worker request id -> resolve
 const L = { cw: 40, ch: 52, rw: 40, rh: 52, rackCols: 10, rackRows: 2, cols: 14, rows: 8 };
 const landscapePhone = matchMedia("(orientation: landscape) and (max-height: 500px)");
 const els = new Map(); // tile id -> element
@@ -46,6 +51,10 @@ const keys = (obj) => Object.keys(obj).map(Number);
 const tile = (id) => S.tiles[id];
 const cur = () => S.players[S.turn];
 const humanCount = () => S.players.filter((p) => p.type === "human").length;
+const rackCount = (p) => p.count ?? keys(p.rack).length;
+const poolLeft = () => (S.online ? S.poolCount : S.pool.length);
+// It's this device's turn (always true for a human's turn in a local game).
+const myTurn = () => !S.over && (S.online ? S.turn === S.online.seat : cur().type === "human");
 const later = (fn, ms) => {
   const token = gameToken;
   setTimeout(() => token === gameToken && fn(), ms);
@@ -54,7 +63,20 @@ const later = (fn, ms) => {
 // ---------------------------------------------------------------- state
 
 function save() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch { /* storage full or blocked */ }
+  try {
+    // Online, only how this device arranged its rack is kept locally.
+    if (S.online) localStorage.setItem(rackKey(), JSON.stringify(S.players[S.online.seat].rack));
+    else localStorage.setItem(SAVE_KEY, JSON.stringify(S));
+  } catch { /* storage full or blocked */ }
+}
+
+const rackKey = () => `rummikub:rack:${S.online.id}:${S.online.uid}`;
+
+function loadLocalGame() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
+    return saved && saved.v === 1 ? saved : null;
+  } catch { return null; }
 }
 
 function loadSettings() {
@@ -71,10 +93,12 @@ function shuffle(a) {
 
 function newGame(settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  localStorage.setItem(MODE_KEY, "local");
+  window.Online?.leaveView();
   gameToken++;
   busy = false;
   thinking = null;
-  aiPending = null;
+
   cancelDrag();
   const tiles = makeDeck();
   S = {
@@ -102,12 +126,13 @@ function newGame(settings) {
 // Whose rack is shown at the bottom.
 function viewerIndex() {
   if (!S) return -1;
+  if (S.online) return S.online.seat;
   if (cur().type === "human") return S.turn;
   return S.viewer ?? -1;
 }
 
 function isHumanTurn() {
-  return !!S && !S.over && !covered && !busy && cur().type === "human";
+  return !!S && !covered && !busy && myTurn();
 }
 
 function snapshot() {
@@ -440,14 +465,43 @@ function armTimer() {
 
 function onMain() {
   if (!isHumanTurn()) return;
-  if (!placedThisTurn().length) return humanDraw();
+  if (!placedThisTurn().length) return submitDraw();
   const v = validateTurn();
   if (v.err) {
     toast(v.err);
     if (v.shake) shakeInvalid();
     return;
   }
-  commitTurn(v.placed);
+  submitPlay(v.placed);
+}
+
+function submitPlay(placed) {
+  if (S.online) return sendOnline(() => Online.play(placed));
+  commitTurn(placed);
+}
+
+function submitDraw() {
+  if (S.online) {
+    cancelDrag();
+    revertTurn();
+    render();
+    return sendOnline(() => Online.draw());
+  }
+  humanDraw();
+}
+
+// Sends a move; the board updates when Firestore sends it back.
+async function sendOnline(fn) {
+  busy = true;
+  renderHUD();
+  try {
+    await fn();
+  } catch (e) {
+    console.warn(e);
+    busy = false;
+    toast(e?.message === "stale" ? "The game moved on without you." : "Couldn't send your move. Check your connection.");
+    render();
+  }
 }
 
 function commitTurn(placed) {
@@ -486,10 +540,10 @@ function onTimeout() {
   const v = validateTurn();
   if (!v.err) {
     toast("Time's up. Your move was played.");
-    commitTurn(v.placed);
+    submitPlay(v.placed);
   } else {
     toast("Time's up! Your tiles went back and you drew a tile.");
-    humanDraw();
+    submitDraw();
   }
 }
 
@@ -512,37 +566,45 @@ function startWorker() {
   try {
     worker = new Worker("ai.js");
     worker.onmessage = (e) => {
-      if (aiPending && e.data.reqId === aiPending.id) aiPending.done(e.data.result);
+      const done = aiPending.get(e.data.reqId);
+      aiPending.delete(e.data.reqId);
+      done?.(e.data.result);
     };
     worker.onerror = () => { worker = null; };
   } catch { worker = null; }
 }
 
-function runAI() {
+// Asks the computer for a move. rack: tile ids; resolves to aiMove's result.
+function requestAIMove(board, rack, melded, level) {
+  const msg = {
+    reqId: ++aiReq,
+    sets: getSets(board).map((s) => s.ids.map((id) => ({ id, ...tile(id) }))),
+    rack: rack.map((id) => ({ id, ...tile(id) })),
+    melded,
+    level,
+    timeLimit: level === "hard" ? 1500 : 300,
+  };
+  if (!worker) return Promise.resolve(aiMove(msg));
+  return new Promise((resolve) => {
+    aiPending.set(msg.reqId, resolve);
+    worker.postMessage(msg);
+  });
+}
+
+async function runAI() {
   if (!S || S.over || cur().type === "human") return;
   const pi = S.turn;
   const p = cur();
-  const msg = {
-    reqId: ++aiReq,
-    sets: getSets(S.board).map((s) => s.ids.map((id) => ({ id, ...tile(id) }))),
-    rack: keys(p.rack).map((id) => ({ id, ...tile(id) })),
-    melded: p.melded,
-    level: p.type,
-    timeLimit: p.type === "hard" ? 1500 : 300,
-  };
+  const token = gameToken;
   thinking = pi;
   renderHUD();
   const t0 = performance.now();
-  const done = (result) => {
-    aiPending = null;
-    later(() => S.turn === pi && !S.over && applyAI(pi, result), Math.max(0, AI_MIN_THINK_MS - (performance.now() - t0)));
-  };
-  if (worker) {
-    aiPending = { id: msg.reqId, done };
-    worker.postMessage(msg);
-  } else done(aiMove(msg));
+  const result = await requestAIMove(S.board, keys(p.rack), p.melded, p.type);
+  if (token !== gameToken) return;
+  later(() => S.turn === pi && !S.over && applyAI(pi, result), Math.max(0, AI_MIN_THINK_MS - (performance.now() - t0)));
 }
 
+// p: {rack: {id: slot}, melded}; checks a computer move against the table in S.
 function aiMoveIsLegal(p, res) {
   const all = res.sets.flat();
   const old = keys(S.board);
@@ -644,6 +706,138 @@ function tryLayout(sets, old, rows, cols) {
     if (!done) return null;
   }
   return out;
+}
+
+// ---------------------------------------------------------------- online games
+
+const MODE_KEY = "rummikub:mode"; // "local" or "online": which game the page reopens
+const SKIP_GRACE_MS = 30_000; // after a human's timer runs out, others may skip them this much later
+
+// Builds S from a Firestore game (called by online.js) and animates the change.
+// g: game doc; hand: this player's tile ids; me: {uid, seat}.
+function applyRemote(id, g, hand, me) {
+  const same = S?.online?.id === id ? S : null;
+  if (same && same.online.moveNo === g.moveNo) return;
+  cancelDrag();
+  if (!same) {
+    gameToken++;
+    thinking = null;
+    for (const el of els.values()) el.remove();
+    els.clear();
+  }
+  covered = false;
+  localStorage.setItem(MODE_KEY, "online");
+
+  // Keep how this device arranged its rack; new tiles go in the first gap.
+  let prevRack = same ? same.players[me.seat].rack : null;
+  if (!prevRack) {
+    try { prevRack = JSON.parse(localStorage.getItem(`rummikub:rack:${id}:${me.uid}`)) || {}; } catch { prevRack = {}; }
+  }
+  const rack = {};
+  const used = new Set();
+  for (const t of hand) {
+    if (t in prevRack && !used.has(prevRack[t])) { rack[t] = prevRack[t]; used.add(prevRack[t]); }
+  }
+  for (const t of hand) if (!(t in rack)) rack[t] = firstFreeSlot(rack);
+
+  const board = {};
+  for (const [t, rc] of Object.entries(g.board || {})) board[t] = [Math.floor(rc / 100), rc % 100];
+
+  // Animations: another player's new tiles fly from their avatar; tiles new to
+  // this rack fly face down from the pool and flip.
+  const from = new Map();
+  const flip = new Set();
+  const stagger = new Map();
+  let faceDownTo = null;
+  if (same && g.lastMove) {
+    const m = g.lastMove.seat;
+    if (m !== me.seat && g.lastMove.kind === "play") {
+      const chip = chipRect(m);
+      let i = 0;
+      for (const t of keys(board)) {
+        if (t in same.board) continue;
+        from.set(t, chip);
+        flip.add(t);
+        stagger.set(t, i++ * 90);
+      }
+    } else if (m !== me.seat && g.lastMove.kind === "draw") faceDownTo = m;
+    for (const t of hand) {
+      if (!(t in prevRack) && !els.has(t)) {
+        from.set(t, $("#pool").getBoundingClientRect());
+        flip.add(t);
+      }
+    }
+  }
+
+  S = {
+    v: 1,
+    online: { id, seat: me.seat, uid: me.uid, moveNo: g.moveNo, host: g.host },
+    tiles: makeDeck(),
+    pool: [],
+    poolCount: g.poolCount,
+    board,
+    players: g.seats.map((s, i) => ({
+      name: s.name,
+      type: s.type,
+      photo: s.photo || null,
+      rack: i === me.seat ? rack : {},
+      count: i === me.seat ? undefined : g.counts[i],
+      melded: g.melded[i],
+    })),
+    turn: g.turn,
+    timer: g.timer,
+    passes: g.passes,
+    lastPlaced: g.lastPlaced || [],
+    viewer: me.seat,
+    over: g.status === "over" ? { winner: g.over?.winner ?? null } : null,
+    settings: null,
+  };
+  S.turnStart = { board: clone(board), rack: S.turn === me.seat ? clone(rack) : {} };
+  S.history = [];
+  S.turnDeadline = !S.over && S.timer ? Date.now() + S.timer * 1000 : null;
+  busy = false;
+  if (!same) buildChips();
+  save();
+  render({ animate: !!same, from, flip, stagger });
+  if (faceDownTo !== null) flyFaceDown($("#pool").getBoundingClientRect(), chipRect(faceDownTo));
+}
+
+// Results of a finished online game, once everyone's racks can be read.
+// hands[i] = tile ids left in seat i's rack.
+function onlineResults(hands) {
+  if (!S?.online || !S.over) return;
+  const vals = hands.map((h) => h.reduce((a, id) => a + rackValue(tile(id)), 0));
+  let winner = S.over.winner;
+  if (winner === null) winner = vals.indexOf(Math.min(...vals));
+  const scores = vals.map((v) => -(v - vals[winner]));
+  scores[winner] = -scores.reduce((a, b) => a + b, 0);
+  S.over = { winner, vals, scores, left: hands.map((h) => h.length) };
+  render({ animate: false });
+  later(showResults, 500);
+}
+
+function resumeLocal(saved) {
+  window.Online?.leaveView();
+  localStorage.setItem(MODE_KEY, "local");
+  gameToken++;
+  cancelDrag();
+  busy = false;
+  thinking = null;
+  for (const el of els.values()) el.remove();
+  els.clear();
+  S = saved;
+  buildChips();
+  if (S.over) {
+    render({ animate: false });
+    return showResults();
+  }
+  if (cur().type === "human") {
+    covered = humanCount() > 1;
+    S.turnDeadline = null;
+    if (!covered) armTimer();
+  }
+  render({ animate: false });
+  if (cur().type !== "human") later(runAI, 500);
 }
 
 // ---------------------------------------------------------------- rendering
@@ -845,8 +1039,17 @@ function buildChips() {
     const chip = document.createElement("div");
     chip.className = "chip";
     chip.innerHTML = `<div class="avatar"><span></span></div><div class="chip-text"><span class="chip-name"></span><span class="chip-sub"></span></div>`;
-    chip.querySelector(".avatar span").style.setProperty("--av", AVATAR_COLOURS[i % 4]);
-    chip.querySelector(".avatar span").textContent = (p.name.trim()[0] || "?").toUpperCase();
+    const span = chip.querySelector(".avatar span");
+    span.style.setProperty("--av", AVATAR_COLOURS[i % 4]);
+    span.textContent = (p.name.trim()[0] || "?").toUpperCase();
+    if (p.photo) {
+      const img = document.createElement("img");
+      img.referrerPolicy = "no-referrer";
+      img.alt = "";
+      img.src = p.photo;
+      img.onerror = () => img.remove();
+      span.appendChild(img);
+    }
     chip.querySelector(".chip-name").textContent = p.name;
     chip.title = p.type === "human" ? p.name : `${p.name} (computer, ${p.type})`;
     box.appendChild(chip);
@@ -860,11 +1063,11 @@ function renderHUD() {
     if (!chip) return;
     chip.classList.toggle("active", i === S.turn && !S.over);
     const sub = chip.querySelector(".chip-sub");
-    const n = keys(p.rack).length;
+    const n = rackCount(p);
     sub.textContent = `${n} tile${n === 1 ? "" : "s"}${p.type === "human" ? "" : " · AI"}`;
-    sub.classList.toggle("dots", thinking === i);
+    sub.classList.toggle("dots", thinking === i || (!!S.online && i === S.turn && !S.over && p.type !== "human"));
   });
-  $("#pool-count").textContent = S.pool.length;
+  $("#pool-count").textContent = poolLeft();
   const mine = isHumanTurn();
   const v = viewerIndex();
   $("#undo").disabled = !mine || !S.history.length;
@@ -875,18 +1078,20 @@ function renderHUD() {
   main.disabled = !mine;
   main.classList.toggle("done", placed);
   main.classList.toggle("pulse", placed && !validateTurn().err);
-  main.title = placed ? "Finish turn" : S.pool.length ? "Draw a tile and end your turn" : "Pass";
-  main.innerHTML = placed ? "✓" : S.pool.length ? '<span class="main-draw">+<i></i></span>' : "Pass";
+  main.title = placed ? "Finish turn" : poolLeft() ? "Draw a tile and end your turn" : "Pass";
+  main.innerHTML = placed ? "✓" : poolLeft() ? '<span class="main-draw">+<i></i></span>' : "Pass";
   renderStatus();
   tick();
 }
 
 function renderStatus() {
   let text = "";
-  if (S.over) text = `${S.players[S.over.winner].name} won!`;
+  if (S.over) text = S.over.winner === null ? "Game over" : `${S.players[S.over.winner].name} won!`;
   else if (cur().type !== "human") text = `${cur().name} is thinking…`;
+  else if (busy && S.online) text = "Sending…";
   else if (isHumanTurn() && !cur().melded) text = `First meld: ${meldPoints()} / ${FIRST_MELD}`;
-  else if (isHumanTurn()) text = humanCount() > 1 ? `${cur().name}'s turn` : "Your turn";
+  else if (isHumanTurn()) text = humanCount() > 1 && !S.online ? `${cur().name}'s turn` : "Your turn";
+  else if (S.online) text = `${cur().name}'s turn`;
   $("#status").textContent = text;
 }
 
@@ -905,6 +1110,13 @@ function tick() {
   if (S.turnDeadline && Date.now() >= S.turnDeadline && isHumanTurn()) {
     S.turnDeadline = null;
     onTimeout();
+  }
+  // Online: if another player's time ran out a while ago (they've probably
+  // closed the app), skip their turn so the game can carry on.
+  if (S.online && !S.over && S.turnDeadline && cur().type === "human" && !myTurn() && !S.online.skipping && Date.now() >= S.turnDeadline + SKIP_GRACE_MS) {
+    S.online.skipping = true;
+    toast(`${cur().name} isn't responding. Skipping their turn.`);
+    Online.skip(S.online.moveNo).catch((e) => console.warn(e));
   }
 }
 
@@ -1103,18 +1315,33 @@ function readSetup() {
 
 function showResults() {
   const o = S.over;
+  if (!o.vals) return; // online: waiting for everyone's racks (onlineResults)
   $("#results-title").textContent = `${S.players[o.winner].name} won!`;
   const order = S.players.map((p, i) => i).sort((a, b) => o.scores[b] - o.scores[a]);
   $("#results-table").innerHTML = "";
   for (const i of order) {
     const tr = document.createElement("tr");
     if (i === o.winner) tr.className = "win";
-    const left = keys(S.players[i].rack).length;
+    const left = o.left ? o.left[i] : keys(S.players[i].rack).length;
     tr.innerHTML = `<td></td><td>${left} tile${left === 1 ? "" : "s"} left (${o.vals[i]})</td><td>${o.scores[i] > 0 ? "+" : ""}${o.scores[i]}</td>`;
     tr.firstChild.textContent = S.players[i].name;
     $("#results-table").appendChild(tr);
   }
-  $("#results").showModal();
+  $("#results-again").hidden = !!S.online;
+  $("#results-new").textContent = S.online ? "Back to lobby" : "New game…";
+  if (!$("#results").open) $("#results").showModal();
+}
+
+function openHome() {
+  $("#home-resume").hidden = !S;
+  $("#home").showModal();
+}
+
+// "Play on this device": back to the local game, or set one up.
+function goLocal() {
+  const saved = loadLocalGame();
+  if (saved && !saved.over) resumeLocal(saved);
+  else openSetup();
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1133,12 +1360,23 @@ function init() {
   $("#reset").onclick = resetTurn;
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
-  $("#menu-btn").onclick = openSetup;
+  $("#menu-btn").onclick = openHome;
+  $("#home-resume").onclick = () => $("#home").close();
+  $("#home-local").onclick = () => { $("#home").close(); goLocal(); };
+  $("#home-online").onclick = () => {
+    $("#home").close();
+    if (window.Online) Online.openLobby();
+    else toast("Online play couldn't load. Check your connection.");
+  };
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
   $("#results-again").onclick = () => { $("#results").close(); newGame(S.settings); };
-  $("#results-new").onclick = () => { $("#results").close(); openSetup(); };
+  $("#results-new").onclick = () => {
+    $("#results").close();
+    if (S.online) Online.openLobby();
+    else openSetup();
+  };
   $("#cover-btn").onclick = () => {
     covered = false;
     armTimer();
@@ -1147,23 +1385,11 @@ function init() {
   };
   setInterval(tick, 250);
 
-  try {
-    const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
-    if (saved && saved.v === 1) S = saved;
-  } catch { S = null; }
-  if (!S) return openSetup();
-  buildChips();
-  if (S.over) {
-    render({ animate: false });
-    return showResults();
-  }
-  if (cur().type === "human") {
-    covered = humanCount() > 1;
-    S.turnDeadline = null;
-    if (!covered) armTimer();
-  }
-  render({ animate: false });
-  if (cur().type !== "human") later(runAI, 500);
+  // An online game is reopened by online.js once sign-in has loaded.
+  if (localStorage.getItem(MODE_KEY) === "online") return;
+  const saved = loadLocalGame();
+  if (saved) resumeLocal(saved);
+  else openHome();
 }
 
 // ---------------------------------------------------------------- version check
@@ -1172,7 +1398,7 @@ function init() {
 // copy is common right after a deploy. The game is saved after every move, so updating
 // (which reloads the page) carries on where you left off.
 
-const APP_FILES = ["./", "index.html", "app.js", "ai.js", "rules.js", "version.js", "style.css", "manifest.webmanifest", "icon.svg"];
+const APP_FILES = ["./", "index.html", "app.js", "online.js", "ai.js", "rules.js", "version.js", "style.css", "manifest.webmanifest", "icon.svg"];
 const VERSION_CHECK_MS = 5 * 60_000;
 const versionBtn = $("#version");
 let latestVersion = null;
