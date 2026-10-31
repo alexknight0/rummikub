@@ -195,27 +195,60 @@ function boardOcc() {
   return occ;
 }
 
-// Drops a tile at (r, c). If the cell is taken, the tiles there shift along
-// the row (right if there's room, otherwise left).
+// Drops a tile at (r, c). If a set is already there:
+// - if putting the tile into the set at that spot makes it valid, it goes in
+//   and the set grows (pushing any set it would touch out of the way);
+// - otherwise the set moves out of the way to the nearest free spot.
+// Before the first meld, sets always move out of the way.
 function placeOnBoard(id, r, c) {
-  const occ = boardOcc();
-  const at = (x) => occ.get(r * 1000 + x);
-  if (at(c) === undefined) { S.board[id] = [r, c]; return true; }
-  let j = c;
-  while (j < S.boardCols && at(j) !== undefined) j++;
-  if (j < S.boardCols) {
-    for (let x = j - 1; x >= c; x--) S.board[at(x)] = [r, x + 1];
+  const target = getSets(S.board).find((s) => s.r === r && c >= s.c && c < s.c + s.ids.length);
+  if (!target) {
     S.board[id] = [r, c];
     return true;
   }
-  j = c;
-  while (j >= 0 && at(j) !== undefined) j--;
-  if (j >= 0) {
-    for (let x = j + 1; x <= c; x++) S.board[at(x)] = [r, x - 1];
-    S.board[id] = [r, c];
+  const grown = target.ids.slice();
+  grown.splice(c - target.c, 0, id);
+  if (cur().melded && setInfo(grown).valid) {
+    const start = Math.max(0, Math.min(target.c, S.boardCols - grown.length));
+    for (const t of target.ids) delete S.board[t];
+    // Sets that would overlap or touch the grown set (found before placing
+    // it, while they're still separate sets) move out of the way.
+    const blockers = getSets(S.board).filter((s) => s.r === r && s.c <= start + grown.length && s.c + s.ids.length >= start);
+    for (const s of blockers) for (const t of s.ids) delete S.board[t];
+    grown.forEach((t, i) => { S.board[t] = [r, start + i]; });
+    for (const s of blockers) moveSetNear(s.ids, r, s.c);
     return true;
   }
-  return false;
+  for (const t of target.ids) delete S.board[t];
+  S.board[id] = [r, c];
+  moveSetNear(target.ids, r, target.c);
+  return true;
+}
+
+// Puts a set (currently off the table) in the free spot closest to (r, c),
+// with a gap on both sides so it doesn't join another set (or the tile just
+// dropped). Adds a row if the table is full.
+function moveSetNear(ids, r, c) {
+  const len = ids.length;
+  for (;;) {
+    const occ = boardOcc();
+    const free = (rr, x) => x < 0 || x >= S.boardCols || !occ.has(rr * 1000 + x);
+    let best = null;
+    for (let rr = 0; rr < S.boardRows; rr++) {
+      for (let x = 0; x + len <= S.boardCols; x++) {
+        let ok = true;
+        for (let k = x - 1; k <= x + len && ok; k++) ok = free(rr, k);
+        if (!ok) continue;
+        const d = Math.abs(rr - r) * 3 + Math.abs(x - c);
+        if (!best || d < best.d) best = { rr, x, d };
+      }
+    }
+    if (best) {
+      ids.forEach((t, i) => { S.board[t] = [best.rr, best.x + i]; });
+      return;
+    }
+    S.boardRows++;
+  }
 }
 
 // Drops a tile in a rack slot; tiles from there on shift along to the next gap.
@@ -264,20 +297,65 @@ function sortRack(mode) {
   const rack = S.players[v].rack;
   const list = keys(rack).map((id) => ({ id, ...tile(id) }));
   const key = mode === "num" ? (t) => (isJoker(t) ? 1e4 : t.n * 10 + t.c) : (t) => (isJoker(t) ? 1e4 : t.c * 100 + t.n);
-  const group = (t) => (isJoker(t) ? "J" : mode === "num" ? t.n : t.c);
   list.sort((a, b) => key(a) - key(b) || a.id - b.id);
-  const groups = new Set(list.map(group)).size;
-  const gaps = list.length + groups - 1 <= Math.max(RACK_MIN_ROWS, L.rackRows) * L.rackCols;
+  // Sets ready to play come first (777: groups, 789: runs), each in its own
+  // block; the leftover tiles follow, sorted as before.
+  const ready = mode === "num" ? readyGroups(list) : readyRuns(list);
+  const inReady = new Set(ready.flat().map((t) => t.id));
+  const seq = [];
+  ready.forEach((s, i) => s.forEach((t) => seq.push({ t, g: "set" + i })));
+  for (const t of list) if (!inReady.has(t.id)) seq.push({ t, g: isJoker(t) ? "J" : mode === "num" ? t.n : t.c });
+  const groups = new Set(seq.map((x) => x.g)).size;
+  const gaps = seq.length + groups - 1 <= Math.max(RACK_MIN_ROWS, L.rackRows) * L.rackCols;
   if (isHumanTurn()) S.history.push(snapshot());
   let slot = 0;
   let prev = null;
-  for (const t of list) {
-    if (gaps && prev !== null && group(t) !== prev) slot++;
+  for (const { t, g } of seq) {
+    if (gaps && prev !== null && g !== prev) slot++;
     rack[t.id] = slot++;
-    prev = group(t);
+    prev = g;
   }
   save();
   render();
+}
+
+// Groups (3-4 different colours of one number) in sorted tiles. Jokers are left out.
+function readyGroups(list) {
+  const out = [];
+  for (let n = 1; n <= 13; n++) {
+    const byColour = [[], [], [], []];
+    for (const t of list) if (!isJoker(t) && t.n === n) byColour[t.c].push(t);
+    for (;;) {
+      const have = byColour.filter((a) => a.length);
+      if (have.length < 3) break;
+      out.push(have.map((a) => a.shift()));
+    }
+  }
+  return out;
+}
+
+// Runs (3+ in a row, one colour) in sorted tiles, longest streaks first
+// within each colour. Jokers are left out.
+function readyRuns(list) {
+  const out = [];
+  for (let c = 0; c < 4; c++) {
+    const byNum = Array.from({ length: 15 }, () => []);
+    for (const t of list) if (t.c === c) byNum[t.n].push(t);
+    for (;;) {
+      let best = null;
+      for (let s = 1; s <= 13; s++) {
+        if (!byNum[s].length || byNum[s - 1].length) continue;
+        let e = s;
+        while (byNum[e + 1].length) e++;
+        if (e - s + 1 >= 3 && (!best || e - s > best[1] - best[0])) best = [s, e];
+      }
+      if (!best) break;
+      const run = [];
+      for (let n = best[0]; n <= best[1]; n++) run.push(byNum[n].shift());
+      out.push(run);
+    }
+  }
+  return out;
 }
 
 function undo() {
