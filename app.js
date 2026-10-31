@@ -1166,4 +1166,69 @@ function init() {
   if (cur().type !== "human") later(runAI, 500);
 }
 
+// ---------------------------------------------------------------- version check
+// VERSION (version.js) is the copy that's running; version.js fetched with no-store is
+// what GitHub Pages serves now. Pages lets browsers cache files for 10 min, so a stale
+// copy is common right after a deploy. The game is saved after every move, so updating
+// (which reloads the page) carries on where you left off.
+
+const APP_FILES = ["./", "index.html", "app.js", "ai.js", "rules.js", "version.js", "style.css", "manifest.webmanifest", "icon.svg"];
+const VERSION_CHECK_MS = 5 * 60_000;
+const versionBtn = $("#version");
+let latestVersion = null;
+
+function formatVersion(v) {
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
+function setVersionState(state) {
+  const labels = {
+    checking: "Checking for updates…",
+    ok: `Up to date (version ${formatVersion(VERSION)})`,
+    stale: `Update available: running ${formatVersion(VERSION)}, latest is ${formatVersion(latestVersion)}. Tap to update.`,
+    unknown: `Couldn't check for updates (offline?). Running ${formatVersion(VERSION)}.`,
+    updating: "Updating…",
+  };
+  versionBtn.dataset.state = state;
+  versionBtn.title = labels[state];
+  versionBtn.setAttribute("aria-label", labels[state]);
+  versionBtn.querySelector("span").textContent = state === "stale" ? "Update" : "";
+}
+
+async function checkVersion() {
+  if (versionBtn.dataset.state === "updating") return;
+  try {
+    const res = await fetch(`version.js?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    latestVersion = (await res.text()).match(/VERSION = "([^"]+)"/)?.[1];
+    if (!latestVersion) throw new Error("no version");
+    // ISO timestamps compare as strings; only a newer live copy counts as an update.
+    setVersionState(latestVersion > VERSION ? "stale" : "ok");
+  } catch {
+    setVersionState("unknown");
+  }
+}
+
+versionBtn.addEventListener("click", async () => {
+  const state = versionBtn.dataset.state;
+  if (state !== "stale") {
+    toast(versionBtn.title);
+    if (state === "unknown") checkVersion();
+    return;
+  }
+  setVersionState("updating");
+  cancelDrag();
+  if (S) save();
+  // Refresh every file in the HTTP cache first; a plain reload could still use the stale copies.
+  await Promise.all(APP_FILES.map((f) => fetch(f, { cache: "reload" }).catch(() => {})));
+  location.reload();
+});
+
+setVersionState("checking");
+checkVersion();
+setInterval(checkVersion, VERSION_CHECK_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
+window.addEventListener("online", checkVersion);
+
 init();
