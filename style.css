@@ -339,3 +339,49 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 #results-table td { padding: 6px 4px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
 #results-table td:last-child { text-align: right; font-weight: 700; }
 #results-table tr.win td { color: var(--accent); }
+
+/* ---------- landscape phone: players left, buttons right (like the app) ---------- */
+
+@media (orientation: landscape) and (max-height: 500px) {
+  body {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: 1fr auto;
+    grid-template-areas: "hud board controls" "hud rack controls";
+  }
+  #hud {
+    grid-area: hud;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 6px 4px;
+    width: 76px;
+  }
+  #players { flex-direction: column; flex: 1; overflow-y: auto; overflow-x: hidden; gap: 8px; }
+  .chip { flex-direction: column; gap: 2px; padding: 4px 2px; border-radius: 12px; }
+  .chip-text { align-items: center; }
+  .chip-name { max-width: 8ch; font-size: 12px; }
+  .avatar { width: 38px; height: 38px; }
+  .avatar span { width: 32px; height: 32px; font-size: 15px; }
+  #pool { flex-direction: column; gap: 2px; }
+  #menu-btn { order: -1; }
+
+  #board-wrap { grid-area: board; }
+
+  #controls {
+    grid-area: controls;
+    flex-direction: column;
+    justify-content: flex-end;
+    width: 84px;
+    padding: 8px 6px;
+    border-top: 0;
+    border-left: 2px solid #a8743f;
+    background: linear-gradient(90deg, var(--wood), var(--wood-dark));
+  }
+  #controls .ctl { width: 100%; }
+  #controls .ctl.sort { height: 46px; font-size: 18px; }
+  #controls .ctl.main { height: 64px; font-size: 26px; margin-top: 4px; }
+  #undo, #reset { height: 36px; }
+  #status { flex: 1; display: flex; align-items: center; font-size: 11px; }
+
+  #rack-wrap { grid-area: rack; padding: 4px 8px 6px; }
+}

@@ -36,7 +36,8 @@ let gameToken = 0; // bumped on every new game so stale timeouts do nothing
 let worker = null;
 let aiReq = 0;
 let aiPending = null;
-const L = { cw: 40, ch: 52, rw: 40, rh: 52, rackCols: 10, rackRows: 2 };
+const L = { cw: 40, ch: 52, rw: 40, rh: 52, rackCols: 10, rackRows: 2, cols: 14, rows: 8 };
+const landscapePhone = matchMedia("(orientation: landscape) and (max-height: 500px)");
 const els = new Map(); // tile id -> element
 const ghosts = new Map(); // tile id -> flying copy currently animating
 
@@ -76,14 +77,11 @@ function newGame(settings) {
   aiPending = null;
   cancelDrag();
   const tiles = makeDeck();
-  const portrait = innerHeight > innerWidth;
   S = {
     v: 1,
     tiles,
     pool: shuffle(tiles.map((_, i) => i)),
     board: {},
-    boardCols: portrait ? 14 : 24,
-    boardRows: portrait ? 12 : 8,
     players: settings.players.map((p) => ({ name: p.name, type: p.type, rack: {}, melded: false })),
     turn: Math.floor(Math.random() * settings.players.length),
     timer: settings.timer,
@@ -209,7 +207,7 @@ function placeOnBoard(id, r, c) {
   const grown = target.ids.slice();
   grown.splice(c - target.c, 0, id);
   if (cur().melded && setInfo(grown).valid) {
-    const start = Math.max(0, Math.min(target.c, S.boardCols - grown.length));
+    const start = Math.max(0, Math.min(target.c, L.cols - grown.length));
     for (const t of target.ids) delete S.board[t];
     // Sets that would overlap or touch the grown set (found before placing
     // it, while they're still separate sets) move out of the way.
@@ -227,15 +225,17 @@ function placeOnBoard(id, r, c) {
 
 // Puts a set (currently off the table) in the free spot closest to (r, c),
 // with a gap on both sides so it doesn't join another set (or the tile just
-// dropped). Adds a row if the table is full.
+// dropped). Uses a new row below if the visible table is full (the table
+// then shrinks to fit on the next render).
 function moveSetNear(ids, r, c) {
   const len = ids.length;
-  for (;;) {
+  const cols = Math.max(L.cols - 1, len);
+  for (let rows = L.rows - 1; ; rows++) {
     const occ = boardOcc();
-    const free = (rr, x) => x < 0 || x >= S.boardCols || !occ.has(rr * 1000 + x);
+    const free = (rr, x) => x < 0 || x >= cols || !occ.has(rr * 1000 + x);
     let best = null;
-    for (let rr = 0; rr < S.boardRows; rr++) {
-      for (let x = 0; x + len <= S.boardCols; x++) {
+    for (let rr = 0; rr < rows; rr++) {
+      for (let x = 0; x + len <= cols; x++) {
         let ok = true;
         for (let k = x - 1; k <= x + len && ok; k++) ok = free(rr, k);
         if (!ok) continue;
@@ -247,7 +247,6 @@ function moveSetNear(ids, r, c) {
       ids.forEach((t, i) => { S.board[t] = [best.rr, best.x + i]; });
       return;
     }
-    S.boardRows++;
   }
 }
 
@@ -582,9 +581,11 @@ function applyAI(pi, res) {
 // Positions the computer's new table. Sets keep their old spot when they can
 // (most of their tiles were already there), the rest go in the first gap.
 function layoutSets(sets, old) {
-  for (let rows = S.boardRows; ; rows++) {
-    const out = tryLayout(sets, old, rows, S.boardCols);
-    if (out) { S.boardRows = rows; return out; }
+  // Leave the spare last row and column free (see computeLayout).
+  const cols = Math.max(L.cols - 1, ...sets.map((s) => s.length));
+  for (let rows = L.rows - 1; ; rows++) {
+    const out = tryLayout(sets, old, rows, cols);
+    if (out) return out;
   }
 }
 
@@ -649,23 +650,42 @@ function computeLayout() {
   const v = viewerIndex();
   const rack = v >= 0 ? S.players[v].rack : {};
   const W = rackWrap.clientWidth - 16;
-  L.rackCols = Math.max(10, Math.min(20, Math.floor(W / 44)));
-  L.rw = Math.floor(W / L.rackCols);
-  L.rh = Math.round(L.rw * 1.3);
-  if (L.rh > 66) { L.rh = 66; L.rw = Math.round(66 / 1.3); }
+  if (landscapePhone.matches) {
+    // Like the app: tiles about 1/7 of the screen height, ~10-14 per rack row.
+    L.rh = Math.round(Math.max(40, Math.min(66, innerHeight / 7)));
+    L.rw = Math.round(L.rh / 1.3);
+    L.rackCols = Math.max(10, Math.min(14, Math.floor(W / L.rw)));
+  } else {
+    L.rackCols = Math.max(10, Math.min(20, Math.floor(W / 44)));
+    L.rw = Math.floor(W / L.rackCols);
+    L.rh = Math.round(L.rw * 1.3);
+    if (L.rh > 66) { L.rh = 66; L.rw = Math.round(66 / 1.3); }
+  }
   let max = -1;
   for (const id in rack) max = Math.max(max, rack[id]);
   L.rackRows = Math.max(RACK_MIN_ROWS, Math.ceil((max + 1) / L.rackCols));
   Object.assign(rackEl.style, { width: L.rackCols * L.rw + "px", height: L.rackRows * L.rh + "px" });
   rackEl.style.setProperty("--ch", L.rh + "px");
 
+  // Table tiles are rack-sized and the grid fills the table area, with a free
+  // row and column past the furthest tile so any set can be extended. Tiles
+  // only shrink when that doesn't fit.
   const bw = boardWrap.clientWidth - 8;
   const bh = boardWrap.clientHeight - 8;
-  let cw = Math.floor(Math.min(bw / S.boardCols, bh / S.boardRows / 1.3));
-  cw = Math.max(22, Math.min(64, cw));
-  L.cw = cw;
-  L.ch = Math.round(cw * 1.3);
-  Object.assign(boardEl.style, { width: S.boardCols * L.cw + "px", height: S.boardRows * L.ch + "px" });
+  let maxR = -1;
+  let maxC = -1;
+  for (const id in S.board) {
+    maxR = Math.max(maxR, S.board[id][0]);
+    maxC = Math.max(maxC, S.board[id][1]);
+  }
+  const target = Math.min(L.rw, Math.floor(bw / 10)); // at least 10 columns; longer runs make the table shrink to fit
+  const needCols = Math.max(Math.floor(bw / target), maxC + 2);
+  const needRows = Math.max(Math.floor(bh / (target * 1.3)), maxR + 2);
+  L.cw = Math.max(18, Math.floor(Math.min(target, bw / needCols, bh / needRows / 1.3)));
+  L.ch = Math.round(L.cw * 1.3);
+  L.cols = Math.max(needCols, Math.floor(bw / L.cw));
+  L.rows = Math.max(needRows, Math.floor(bh / L.ch));
+  Object.assign(boardEl.style, { width: L.cols * L.cw + "px", height: L.rows * L.ch + "px" });
   boardEl.style.setProperty("--cw", L.cw + "px");
   boardEl.style.setProperty("--ch", L.ch + "px");
 }
@@ -899,7 +919,7 @@ function dropTarget(x, y) {
     const g = boardEl.getBoundingClientRect();
     const c = Math.floor((x - g.left) / L.cw);
     const r = Math.floor((y - g.top) / L.ch);
-    if (c < 0 || r < 0 || c >= S.boardCols || r >= S.boardRows) return null;
+    if (c < 0 || r < 0 || c >= L.cols || r >= L.rows) return null;
     return { area: "board", r, c };
   }
   if (inside(rackWrap.getBoundingClientRect()) || inside($("#controls").getBoundingClientRect())) {
@@ -946,7 +966,8 @@ function onPointerMove(e) {
     dragLayer.appendChild(drag.el);
     drag.el.classList.add("dragging");
   }
-  const overBoard = e.clientY < boardWrap.getBoundingClientRect().bottom;
+  const br = boardWrap.getBoundingClientRect();
+  const overBoard = e.clientX >= br.left && e.clientX <= br.right && e.clientY >= br.top && e.clientY <= br.bottom;
   const [w, h] = overBoard ? [L.cw, L.ch] : [L.rw, L.rh];
   const x = e.clientX - drag.fx * w;
   const y = e.clientY - drag.fy * h;
