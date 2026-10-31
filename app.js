@@ -299,12 +299,12 @@ function sortRack(mode) {
   const key = mode === "num" ? (t) => (isJoker(t) ? 1e4 : t.n * 10 + t.c) : (t) => (isJoker(t) ? 1e4 : t.c * 100 + t.n);
   list.sort((a, b) => key(a) - key(b) || a.id - b.id);
   // Sets ready to play come first (777: groups, 789: runs), each in its own
-  // block; the leftover tiles follow, sorted as before.
+  // block; the leftover tiles follow in one block, sorted as before.
   const ready = mode === "num" ? readyGroups(list) : readyRuns(list);
   const inReady = new Set(ready.flat().map((t) => t.id));
   const seq = [];
   ready.forEach((s, i) => s.forEach((t) => seq.push({ t, g: "set" + i })));
-  for (const t of list) if (!inReady.has(t.id)) seq.push({ t, g: isJoker(t) ? "J" : mode === "num" ? t.n : t.c });
+  for (const t of list) if (!inReady.has(t.id)) seq.push({ t, g: "rest" });
   const groups = new Set(seq.map((x) => x.g)).size;
   const gaps = seq.length + groups - 1 <= Math.max(RACK_MIN_ROWS, L.rackRows) * L.rackCols;
   if (isHumanTurn()) S.history.push(snapshot());
