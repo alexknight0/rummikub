@@ -290,6 +290,28 @@ function tryMove(id, dest) {
   return true;
 }
 
+// Moves a whole table set so the grabbed tile (index idx) lands at dest.
+// Sets it would overlap or touch move out of the way.
+function tryMoveSet(ids, idx, dest) {
+  if (dest.area !== "board" || !isHumanTurn()) {
+    if (dest.area === "rack") toast("Drag tiles one at a time to put them back in your rack.");
+    return false;
+  }
+  const n = ids.length;
+  const r = dest.r;
+  const c = Math.max(0, Math.min(dest.c - idx, L.cols - n));
+  const before = snapshot();
+  for (const t of ids) delete S.board[t];
+  const blockers = getSets(S.board).filter((s) => s.r === r && s.c <= c + n && s.c + s.ids.length >= c);
+  for (const s of blockers) for (const t of s.ids) delete S.board[t];
+  ids.forEach((t, i) => { S.board[t] = [r, c + i]; });
+  for (const s of blockers) moveSetNear(s.ids, r, s.c);
+  if (JSON.stringify(S.board) === JSON.stringify(before.board)) return false;
+  S.history.push(before);
+  save();
+  return true;
+}
+
 function sortRack(mode) {
   const v = viewerIndex();
   if (v < 0 || covered) return;
@@ -722,7 +744,7 @@ function render(opts = {}) {
     want.add(id);
     let el = els.get(id);
     if (!el) els.set(id, (el = makeTileEl(id)));
-    if (drag && drag.active && drag.id === id) return;
+    if (drag && drag.active && drag.ids.includes(id)) return;
     if (el.parentNode !== parent) parent.appendChild(el);
     Object.assign(el.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px", fontSize: w * 0.5 + "px" });
     el.classList.toggle("fresh", id in fresh && id in S.board);
@@ -739,7 +761,7 @@ function render(opts = {}) {
     place(id, rackEl, (slot % L.rackCols) * L.rw, Math.floor(slot / L.rackCols) * L.rh, L.rw, L.rh);
   }
   for (const [id, el] of els) {
-    if (want.has(id) || (drag && drag.id === id)) continue;
+    if (want.has(id) || (drag && drag.active && drag.ids.includes(id))) continue;
     el.remove();
     els.delete(id);
   }
@@ -747,7 +769,7 @@ function render(opts = {}) {
   if (animate) {
     for (const id of want) {
       const f = first.get(id);
-      if (!f || (drag && drag.active && drag.id === id)) continue;
+      if (!f || (drag && drag.active && drag.ids.includes(id))) continue;
       fly(id, f, opts.flip?.has(id), opts.stagger?.get(id) || 0);
     }
   }
@@ -934,11 +956,15 @@ function dropTarget(x, y) {
 function showHint(dest) {
   if (!dest) { hint.remove(); return; }
   const board = dest.area === "board";
+  const n = drag ? drag.ids.length : 1;
   const [parent, w, h] = board ? [boardEl, L.cw, L.ch] : [rackEl, L.rw, L.rh];
-  const [x, y] = board ? [dest.c * w, dest.r * h] : [(dest.slot % L.rackCols) * w, Math.floor(dest.slot / L.rackCols) * h];
+  let [x, y] = board ? [dest.c * w, dest.r * h] : [(dest.slot % L.rackCols) * w, Math.floor(dest.slot / L.rackCols) * h];
+  if (board && n > 1) x = Math.max(0, Math.min(dest.c - drag.idx, L.cols - n)) * w;
   if (hint.parentNode !== parent) parent.appendChild(hint);
-  Object.assign(hint.style, { left: x + 1 + "px", top: y + 1 + "px", width: w - 2 + "px", height: h - 2 + "px" });
+  Object.assign(hint.style, { left: x + 1 + "px", top: y + 1 + "px", width: (board ? n : 1) * w - 2 + "px", height: h - 2 + "px" });
 }
+
+const LONG_PRESS_MS = 380;
 
 function onPointerDown(e) {
   if (drag || e.button > 0) return;
@@ -952,26 +978,60 @@ function onPointerDown(e) {
   }
   e.preventDefault();
   const r = el.getBoundingClientRect();
-  drag = { id, el, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
+  drag = { id, ids: [id], idx: 0, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
+  // Holding still on a table tile picks up its whole set.
+  if (id in S.board) {
+    const set = getSets(S.board).find((s) => s.ids.includes(id));
+    if (set.ids.length > 1 && set.ids.every(canDrag)) {
+      const d = drag;
+      d.timer = setTimeout(() => {
+        if (drag !== d || d.active) return;
+        d.ids = set.ids;
+        d.idx = set.ids.indexOf(id);
+        navigator.vibrate?.(15);
+        activateDrag();
+        moveDrag();
+      }, LONG_PRESS_MS);
+    }
+  }
+}
+
+function activateDrag() {
+  clearTimeout(drag.timer);
+  drag.active = true;
+  drag.els = drag.ids.map((id) => {
+    const g = ghosts.get(id);
+    if (g) { g.remove(); ghosts.delete(id); }
+    const el = els.get(id);
+    el.style.visibility = "";
+    dragLayer.appendChild(el);
+    el.classList.add("dragging");
+    return el;
+  });
 }
 
 function onPointerMove(e) {
   if (!drag || e.pointerId !== drag.pointerId) return;
+  drag.x = e.clientX;
+  drag.y = e.clientY;
   if (!drag.active) {
     if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) return;
-    drag.active = true;
-    const g = ghosts.get(drag.id);
-    if (g) { g.remove(); ghosts.delete(drag.id); }
-    drag.el.style.visibility = "";
-    dragLayer.appendChild(drag.el);
-    drag.el.classList.add("dragging");
+    activateDrag();
   }
+  moveDrag();
+}
+
+// Positions the dragged tile(s) under the finger. For a set, the drop target
+// is the cell under the tile that was grabbed.
+function moveDrag() {
   const br = boardWrap.getBoundingClientRect();
-  const overBoard = e.clientX >= br.left && e.clientX <= br.right && e.clientY >= br.top && e.clientY <= br.bottom;
+  const overBoard = drag.x >= br.left && drag.x <= br.right && drag.y >= br.top && drag.y <= br.bottom;
   const [w, h] = overBoard ? [L.cw, L.ch] : [L.rw, L.rh];
-  const x = e.clientX - drag.fx * w;
-  const y = e.clientY - drag.fy * h;
-  Object.assign(drag.el.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px", fontSize: w * 0.5 + "px" });
+  const x = drag.x - drag.fx * w;
+  const y = drag.y - drag.fy * h;
+  drag.els.forEach((el, i) => {
+    Object.assign(el.style, { left: x + (i - drag.idx) * w + "px", top: y + "px", width: w + "px", height: h + "px", fontSize: w * 0.5 + "px" });
+  });
   drag.dest = dropTarget(x + w / 2, y + h / 2);
   showHint(drag.dest);
 }
@@ -984,13 +1044,17 @@ function onPointerUp(e) {
 function finishDrag(drop) {
   const d = drag;
   drag = null;
+  clearTimeout(d.timer);
   hint.remove();
   if (!d.active) return;
-  d.el.classList.remove("dragging");
-  const from = d.el.getBoundingClientRect();
-  if (drop && d.dest && S) tryMove(d.id, d.dest);
-  if (S) render({ from: new Map([[d.id, from]]) });
-  else d.el.remove();
+  const from = new Map();
+  d.els.forEach((el, i) => {
+    el.classList.remove("dragging");
+    from.set(d.ids[i], el.getBoundingClientRect());
+  });
+  if (drop && d.dest && S) d.ids.length > 1 ? tryMoveSet(d.ids, d.idx, d.dest) : tryMove(d.id, d.dest);
+  if (S) render({ from });
+  else d.els.forEach((el) => el.remove());
 }
 
 function cancelDrag() {
