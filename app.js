@@ -23,7 +23,7 @@ const DRAW_MS = 650;
 const AI_MIN_THINK_MS = 0;
 const AI_START_MS = 0;
 const AI_AFTER_MS = 0; // after a computer move (or your draw), before the next turn starts
-const AI_STAGGER_MS = 50; // between its tiles flying onto the table
+const AI_STAGGER_MS = 650; // between its tiles flying onto the table
 const AVATAR_COLOURS = ["#3b7dd8", "#d0533f", "#3aa168", "#9b59b6"];
 const DEFAULT_SETTINGS = {
   players: [{ name: "You", type: "human" }, { name: "Computer", type: "hard" }],
@@ -364,23 +364,21 @@ function sortRack(mode) {
   const list = keys(rack).map((id) => ({ id, ...tile(id) }));
   const key = mode === "num" ? (t) => (isJoker(t) ? 1e4 : t.n * 10 + t.c) : (t) => (isJoker(t) ? 1e4 : t.c * 100 + t.n);
   list.sort((a, b) => key(a) - key(b) || a.id - b.id);
-  // Sets ready to play come first (777: groups, 789: runs), each in its own
-  // block; the leftover tiles follow in one block, sorted as before.
+  // Sets ready to play come first (777: groups, 789: runs), each with a gap
+  // on both sides and never split across two rows; the leftover tiles follow,
+  // packed together and sorted as before. The rack grows a row if needed.
   const ready = mode === "num" ? readyGroups(list) : readyRuns(list);
   const inReady = new Set(ready.flat().map((t) => t.id));
-  const seq = [];
-  ready.forEach((s, i) => s.forEach((t) => seq.push({ t, g: "set" + i })));
-  for (const t of list) if (!inReady.has(t.id)) seq.push({ t, g: "rest" });
-  const groups = new Set(seq.map((x) => x.g)).size;
-  const gaps = seq.length + groups - 1 <= Math.max(RACK_MIN_ROWS, L.rackRows) * L.rackCols;
+  const cols = L.rackCols;
   if (isHumanTurn()) S.history.push(snapshot());
   let slot = 0;
-  let prev = null;
-  for (const { t, g } of seq) {
-    if (gaps && prev !== null && g !== prev) slot++;
-    rack[t.id] = slot++;
-    prev = g;
+  for (const set of ready) {
+    const col = slot % cols;
+    if (col !== 0 && col + set.length > cols) slot += cols - col; // start it on the next row
+    for (const t of set) rack[t.id] = slot++;
+    if (slot % cols !== 0) slot++; // gap after it (none needed at the end of a row)
   }
+  for (const t of list) if (!inReady.has(t.id)) rack[t.id] = slot++;
   save();
   render();
 }
@@ -1498,6 +1496,10 @@ function init() {
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
   window.addEventListener("resize", () => render({ animate: false }));
+  // When the keyboard opens, keep the text box being typed in on screen.
+  document.addEventListener("focusin", (e) => {
+    if (e.target.matches("input")) setTimeout(() => e.target.scrollIntoView({ block: "nearest" }), 350);
+  });
   document.addEventListener("contextmenu", (e) => e.target.closest(".tile") && e.preventDefault());
 
   $("#main-btn").onclick = onMain;
