@@ -512,3 +512,5 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 /* Vertical dividers between the Games screen's header buttons. */
 .page-head .sep { width: 1px; height: 20px; flex: none; background: rgba(255, 255, 255, .18); }
 #account:empty + .sep { display: none; } /* signed out: nothing to divide */
+.page-head .home-sep { display: none; } /* only when the home link shows */
+@media (pointer: fine) and (display-mode: browser) { .page-head .home-sep { display: block; } }

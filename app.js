@@ -988,7 +988,8 @@ function resumeLocal(saved) {
   buildChips();
   if (S.over) {
     render({ animate: false });
-    return S.over.quiet ? goLobby({ replace: true }) : showResults();
+    // A resigned game shows its final table without the results box.
+    return S.over.quiet ? undefined : showResults();
   }
   if (cur().type === "human") {
     covered = humanCount() > 1;
