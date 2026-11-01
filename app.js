@@ -20,9 +20,9 @@ const ANIM_MS = 320;
 const DRAW_MS = 650;
 // The computer's moves take ~1 ms; these short pauses are only so you can see
 // what it did. Animations keep their full length and finish during the next turn.
-const AI_MIN_THINK_MS = 250;
-const AI_START_MS = 100;
-const AI_AFTER_MS = 300; // after a computer move, before the next turn starts
+const AI_MIN_THINK_MS = 0;
+const AI_START_MS = 0;
+const AI_AFTER_MS = 0; // after a computer move (or your draw), before the next turn starts
 const AI_STAGGER_MS = 50; // between its tiles flying onto the table
 const AVATAR_COLOURS = ["#3b7dd8", "#d0533f", "#3aa168", "#9b59b6"];
 const DEFAULT_SETTINGS = {
