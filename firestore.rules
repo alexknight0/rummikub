@@ -7,6 +7,11 @@ service cloud.firestore {
     function game(g) { return get(/databases/$(db)/documents/games/$(g)).data; }
     function isPlayer(g) { return signedIn() && request.auth.uid in game(g).playerUids; }
 
+    // Each player's own games against the computer, synced between their devices.
+    match /users/{uid}/games/{g} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
     match /games/{g} {
       // Anyone signed in sees the lobby and the public table.
       allow read: if signedIn();

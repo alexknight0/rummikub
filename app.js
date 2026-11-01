@@ -1,7 +1,15 @@
 "use strict";
 // Rummikub: table, rack, drag and drop, turns, computer players.
 //
-// State S (saved to localStorage after every change):
+// Screens: the Games screen (no URL hash) and a game (#local=<id> or
+// #online=<id>); route() switches between them, so the phone's back button
+// returns to Games. Only the game on screen is loaded into S.
+//
+// Games on this device are kept in localStorage as "rummikub:g:<id>" (any
+// number of them) and, when signed in, synced through Firestore by online.js
+// (window.Cloud). Each has S.id and S.updated (ms, last change wins).
+//
+// State S (saved after every change):
 //   tiles[id] = {c, n}; pool = [id] (drawn from the end)
 //   board = {id: [row, col]}  — a set is a horizontal run of adjacent tiles
 //   players[i] = {name, type: "human"|"easy"|"hard", rack: {id: slot}, melded}
@@ -13,7 +21,10 @@
 // have p.count instead, and S.poolCount replaces S.pool. Turns are sent with
 // Online.play / Online.draw rather than the local turn loop.
 
-const SAVE_KEY = "rummikub:game";
+const OLD_SAVE_KEY = "rummikub:game"; // the single saved game before multiple games
+const GAME_PREFIX = "rummikub:g:";
+const TOMBSTONES_KEY = "rummikub:deleted"; // {id: ms} games removed on this device
+const FINISHED_KEEP_MS = 3 * 24 * 3600_000; // finished games stay listed this long
 const SETTINGS_KEY = "rummikub:settings";
 const RACK_MIN_ROWS = 2;
 const ANIM_MS = 320;
@@ -77,20 +88,76 @@ const later = (fn, ms) => {
 // ---------------------------------------------------------------- state
 
 function save() {
+  if (!S) return;
   try {
     // Online, only how this device arranged its rack is kept locally.
-    if (S.online) localStorage.setItem(rackKey(), JSON.stringify(S.players[S.online.seat].rack));
-    else localStorage.setItem(SAVE_KEY, JSON.stringify(S));
+    if (S.online) return localStorage.setItem(rackKey(), JSON.stringify(S.players[S.online.seat].rack));
+    S.updated = Date.now();
+    Store.put(S);
+    window.Cloud?.queue(S.id);
   } catch { /* storage full or blocked */ }
 }
 
 const rackKey = () => `rummikub:rack:${S.online.id}:${S.online.uid}`;
 
-function loadLocalGame() {
+// Games on this device. The tile list is the same in every game (makeDeck),
+// so it isn't stored.
+const Store = {
+  pack: (g) => JSON.stringify({ ...g, tiles: undefined }),
+  unpack(text) {
+    const g = JSON.parse(text);
+    if (!g || g.v !== 1) return null;
+    g.tiles = makeDeck();
+    return g;
+  },
+  get(id) {
+    try { return Store.unpack(localStorage.getItem(GAME_PREFIX + id)); } catch { return null; }
+  },
+  put(g) { localStorage.setItem(GAME_PREFIX + g.id, Store.pack(g)); },
+  remove(id) {
+    localStorage.removeItem(GAME_PREFIX + id);
+    const t = Store.tombstones();
+    t[id] = Date.now();
+    localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(t));
+  },
+  tombstones() {
+    try { return JSON.parse(localStorage.getItem(TOMBSTONES_KEY)) || {}; } catch { return {}; }
+  },
+  ids() {
+    const out = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k.startsWith(GAME_PREFIX)) out.push(k.slice(GAME_PREFIX.length));
+    }
+    return out;
+  },
+  all: () => Store.ids().map(Store.get).filter(Boolean),
+};
+
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+// The one saved game from before multiple games becomes a game in the store.
+function migrateOldSave() {
   try {
-    const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
-    return saved && saved.v === 1 ? saved : null;
-  } catch { return null; }
+    const old = JSON.parse(localStorage.getItem(OLD_SAVE_KEY));
+    if (old && old.v === 1) {
+      old.id = newId();
+      old.updated = old.created = Date.now();
+      Store.put(old);
+    }
+  } catch { /* unreadable: drop it */ }
+  localStorage.removeItem(OLD_SAVE_KEY);
+  localStorage.removeItem("rummikub:mode");
+  localStorage.removeItem("rummikub:onlineGame");
+}
+
+// Removes finished games older than FINISHED_KEEP_MS (and old tombstones).
+function pruneGames() {
+  const now = Date.now();
+  for (const g of Store.all()) if (g.over && now - g.updated > FINISHED_KEEP_MS && g.id !== S?.id) Store.remove(g.id);
+  const t = Store.tombstones();
+  for (const id in t) if (now - t[id] > 30 * 24 * 3600_000) delete t[id];
+  localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(t));
 }
 
 function loadSettings() {
@@ -107,9 +174,8 @@ function shuffle(a) {
 
 function newGame(settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  localStorage.setItem(MODE_KEY, "local");
   window.Online?.leaveView();
-  closeHome();
+  const fromGame = !!S;
   gameToken++;
   busy = false;
   thinking = null;
@@ -118,6 +184,9 @@ function newGame(settings) {
   const tiles = makeDeck();
   S = {
     v: 1,
+    id: newId(),
+    created: Date.now(),
+    updated: Date.now(),
     tiles,
     pool: shuffle(tiles.map((_, i) => i)),
     board: {},
@@ -134,6 +203,8 @@ function newGame(settings) {
   S.viewer = S.players.findIndex((p) => p.type === "human");
   for (const el of els.values()) el.remove();
   els.clear();
+  save();
+  showScreen("game", `#local=${S.id}`, { replace: fromGame });
   buildChips();
   startTurn();
 }
@@ -583,7 +654,6 @@ function resignLocal() {
     ? `Resign, ${p.name}? You'll be out and the others carry on.`
     : `Resign this game? ${left.length === 1 ? S.players[left[0]].name + " wins." : "The computer with the fewest tiles wins."}`;
   if (!confirm(msg)) return;
-  closeHome();
   cancelDrag();
   if (S.turn === pi) revertTurn();
   p.resigned = true;
@@ -624,7 +694,7 @@ function gameOver(winner, quiet = false) {
   busy = false;
   save();
   render();
-  if (quiet) openHome();
+  if (quiet) goLobby();
   else later(showResults, 500);
 }
 
@@ -794,7 +864,6 @@ function tryLayout(sets, old, rows, cols) {
 
 // ---------------------------------------------------------------- online games
 
-const MODE_KEY = "rummikub:mode"; // "local" or "online": which game the page reopens
 const SKIP_GRACE_MS = 30_000; // after a human's timer runs out, others may skip them this much later
 
 // Builds S from a Firestore game (called by online.js) and animates the change.
@@ -810,7 +879,6 @@ function applyRemote(id, g, hand, me) {
     els.clear();
   }
   covered = false;
-  localStorage.setItem(MODE_KEY, "online");
 
   // Keep how this device arranged its rack; new tiles go in the first gap.
   let prevRack = same ? same.players[me.seat].rack : null;
@@ -901,13 +969,14 @@ function onlineResults(hands) {
   const quiet = !!S.players[S.online.seat].resigned; // you resigned: no results box
   S.over = { winner, vals, scores: scoresFor(vals, winner), left: hands.map((h) => h.length), quiet };
   render({ animate: false });
-  if (quiet) openHome();
+  if (quiet) goLobby();
   else later(showResults, 500);
 }
 
+// Shows a game from the store. Also used when a newer copy arrives from
+// another device for the game on screen.
 function resumeLocal(saved) {
   window.Online?.leaveView();
-  localStorage.setItem(MODE_KEY, "local");
   gameToken++;
   cancelDrag();
   busy = false;
@@ -915,10 +984,11 @@ function resumeLocal(saved) {
   for (const el of els.values()) el.remove();
   els.clear();
   S = saved;
+  if ($("#results").open) $("#results").close();
   buildChips();
   if (S.over) {
     render({ animate: false });
-    return S.over.quiet ? openHome() : showResults();
+    return S.over.quiet ? goLobby({ replace: true }) : showResults();
   }
   if (cur().type === "human") {
     covered = humanCount() > 1;
@@ -1006,7 +1076,7 @@ function tileRect(id) {
 // opts.from: Map id -> DOMRect to fly from; opts.flip: ids that flip face up;
 // opts.stagger: Map id -> delay ms; opts.animate=false to jump.
 function render(opts = {}) {
-  if (!S) return;
+  if (!S || gameScreen.hidden) return;
   const animate = opts.animate !== false;
   const first = new Map();
   if (animate) for (const id of els.keys()) { const r = tileRect(id); if (r) first.set(id, r); }
@@ -1446,26 +1516,90 @@ function cancelDrag() {
   if (drag) finishDrag(false);
 }
 
-// ---------------------------------------------------------------- games page
+// ---------------------------------------------------------------- screens
 
 const gamesPage = $("#games-page");
+const gameScreen = $("#game-screen");
 const pageOpen = () => !gamesPage.hidden;
+const onGameScreen = () => !gameScreen.hidden;
+let lastGameHash = null; // for "Back to game" on the Games screen
 
-// The full-screen list of games (this device's game and online games).
-function openHome() {
-  for (const d of ["#results", "#room"]) if ($(d).open) $(d).close();
-  cancelDrag();
-  gamesPage.hidden = false;
-  $("#page-back").hidden = !S;
-  renderLocalGames();
-  window.Online?.pageOpened();
+// Changes the URL (unless it's already `hash`) and shows that screen.
+// History entries let the phone's back button go from a game to Games.
+function showScreen(name, hash, { replace = false } = {}) {
+  const url = location.pathname + location.search + (hash || "");
+  if ((location.hash || "") !== (hash || "")) {
+    const st = { fromLobby: name === "game" && pageOpen() };
+    if (replace) history.replaceState(st, "", url);
+    else history.pushState(st, "", url);
+  }
+  const lobby = name === "lobby";
+  if (lobby === pageOpen() && lobby !== onGameScreen()) return;
+  $("#settings-page").hidden = true;
+  gamesPage.hidden = !lobby;
+  gameScreen.hidden = lobby;
+  if (lobby) {
+    renderLocalGames();
+    window.Online?.pageOpened();
+  } else window.Online?.pageClosed();
 }
 
-function closeHome() {
-  $("#settings-page").hidden = true;
-  if (gamesPage.hidden) return;
-  gamesPage.hidden = true;
-  window.Online?.pageClosed();
+// Back to the Games screen; the game that was showing stops (it's saved).
+function goLobby({ replace = false } = {}) {
+  if (S && location.hash) lastGameHash = location.hash;
+  for (const d of ["#results", "#room", "#setup"]) if ($(d).open) $(d).close();
+  cancelDrag();
+  if (S && !S.online) save();
+  window.Online?.leaveView();
+  gameToken++;
+  S = null;
+  busy = false;
+  thinking = null;
+  covered = false;
+  for (const el of els.values()) el.remove();
+  els.clear();
+  dragLayer.innerHTML = "";
+  ghosts.clear();
+  $("#cover").hidden = true;
+  // Came here from the Games screen: step back instead of adding history.
+  if (!replace && history.state?.fromLobby && location.hash) return history.back();
+  showScreen("lobby", "", { replace });
+}
+const openHome = () => goLobby();
+
+function openGame(kind, id) {
+  showScreen("game", `#${kind}=${id}`);
+  route();
+}
+
+// Shows whatever the URL says. Online games wait for sign-in (online.js
+// calls route() again once it knows who's signed in).
+function route() {
+  const m = location.hash.match(/^#(local|online)=([\w-]+)$/);
+  if (!m) {
+    if (S) return goLobby({ replace: true });
+    return showScreen("lobby", "", { replace: true });
+  }
+  const [, kind, id] = m;
+  if (kind === "local") {
+    if (S && !S.online && S.id === id) return showScreen("game", location.hash, { replace: true });
+    const g = Store.get(id);
+    if (!g) {
+      toast("That game isn't on this device.");
+      return goLobby({ replace: true });
+    }
+    showScreen("game", location.hash, { replace: true });
+    return resumeLocal(g);
+  }
+  if (S?.online?.id === id) return showScreen("game", location.hash, { replace: true });
+  if (S) {
+    if (!S.online) save();
+    gameToken++;
+    S = null;
+  }
+  showScreen("game", location.hash, { replace: true });
+  $("#status").textContent = "Loading…";
+  window.Online?.followGame(id); // no-op until signed in
 }
 
 function row(label, sub, buttons, cls = "") {
@@ -1485,25 +1619,41 @@ function row(label, sub, buttons, cls = "") {
   return li;
 }
 
+function ago(ms) {
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
 function renderLocalGames() {
+  if (!pageOpen()) return;
   const ul = $("#local-games");
   ul.innerHTML = "";
-  const g = S && !S.online ? S : loadLocalGame();
-  const showing = !!S && !S.online;
-  if (g && !g.over) {
-    const who = g.players[g.turn];
-    const sub = who.type === "human" ? `${who.name}'s turn` : `${who.name} is playing`;
-    ul.appendChild(row(g.players.map((p) => p.name).join(" vs "), sub, [
-      ["Resign", () => {
-        if (!showing) { closeHome(); resumeLocal(g); }
-        resignLocal();
-      }, "danger"],
-      ["New", () => openSetup()],
-      ["Open", () => (showing ? closeHome() : (closeHome(), resumeLocal(g))), "primary"],
-    ], showing ? "current" : ""));
-  } else {
-    ul.appendChild(row("Play against the computer", "Or pass the phone around", [["New game", () => openSetup(), "primary"]]));
+  pruneGames();
+  const games = Store.all().sort((a, b) => !!a.over - !!b.over || b.updated - a.updated);
+  for (const g of games) {
+    const names = g.players.map((p) => p.name).join(" vs ");
+    let sub;
+    if (g.over) sub = `Finished · ${g.players[g.over.winner]?.name ?? "?"} won · ${ago(g.updated)}`;
+    else {
+      const who = g.players[g.turn];
+      const turn = who.type !== "human" ? `${who.name} to play` : who.name === "You" ? "Your turn" : `${who.name}'s turn`;
+      const tiles = g.players.map((p) => keys(p.rack).length).join(" / ");
+      sub = `${turn} · ${tiles} tiles · ${ago(g.updated)}`;
+    }
+    const buttons = g.over
+      ? [["Remove", () => { Store.remove(g.id); window.Cloud?.remove(g.id); renderLocalGames(); }], ["View", () => openGame("local", g.id)]]
+      : [["Resign", () => { openGame("local", g.id); resignLocal(); }, "danger"], ["Open", () => openGame("local", g.id), "primary"]];
+    ul.appendChild(row(names, sub, buttons, `#local=${g.id}` === lastGameHash ? "current" : ""));
   }
+  if (!games.length) ul.innerHTML = '<li class="empty">No games yet. Start one against the computer, or pass the phone around.</li>';
+  $("#local-sync-note").textContent = window.Cloud?.signedIn()
+    ? "Synced with your Google account, so they're on your other devices too."
+    : "Sign in below to have these on your other devices too.";
+  $("#page-back").hidden = !lastGameHash;
 }
 
 // ---------------------------------------------------------------- dialogs
@@ -1514,7 +1664,7 @@ function openSetup() {
   box.innerHTML = "";
   for (const p of settings.players) addPlayerRow(p);
   $("#setup-timer").value = String(settings.timer);
-  $("#setup-cancel").hidden = !S || !!S.over;
+  $("#setup-cancel").hidden = false;
   updateSetupButtons();
   $("#setup").showModal();
 }
@@ -1589,15 +1739,17 @@ function init() {
   $("#reset").onclick = resetTurn;
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
-  $("#menu-btn").onclick = openHome;
-  $("#hud-home").onclick = (e) => { e.preventDefault(); openHome(); };
+  $("#menu-btn").onclick = () => goLobby();
+  $("#hud-home").onclick = (e) => { e.preventDefault(); goLobby(); };
+  $("#new-local").onclick = () => openSetup();
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
-  $("#page-back").onclick = closeHome;
+  $("#page-back").onclick = () => lastGameHash && (showScreen("game", lastGameHash), route());
   $("#settings-btn").onclick = () => {
     $("#pref-fast").checked = prefs.fast;
     $(`input[name=pref-pickup][value=${prefs.pickup}]`).checked = true;
     $("#settings-page").hidden = false;
   };
+  window.addEventListener("popstate", route);
   $("#settings-back").onclick = () => { $("#settings-page").hidden = true; };
   $("#pref-fast").onchange = (e) => setPref("fast", e.target.checked);
   for (const r of document.querySelectorAll("input[name=pref-pickup]")) r.onchange = () => { setPref("pickup", r.value); setSelection(null); };
@@ -1607,7 +1759,7 @@ function init() {
   $("#results-again").onclick = () => { $("#results").close(); newGame(S.settings); };
   $("#results-new").onclick = () => {
     $("#results").close();
-    if (S.online) openHome();
+    if (S.online) goLobby();
     else openSetup();
   };
   $("#cover-btn").onclick = () => {
@@ -1618,11 +1770,8 @@ function init() {
   };
   setInterval(tick, 250);
 
-  // An online game is reopened by online.js once sign-in has loaded.
-  if (localStorage.getItem(MODE_KEY) === "online") return;
-  const saved = loadLocalGame();
-  if (saved) resumeLocal(saved);
-  else openHome();
+  migrateOldSave();
+  route();
 }
 
 // ---------------------------------------------------------------- version check
@@ -1633,7 +1782,7 @@ function init() {
 
 const APP_FILES = ["./", "index.html", "app.js", "online.js", "ai.js", "rules.js", "version.js", "style.css", "manifest.webmanifest", "icon.svg"];
 const VERSION_CHECK_MS = 5 * 60_000;
-const versionBtn = $("#version");
+const versionBtns = [...document.querySelectorAll(".version")]; // in a game and on the Games screen
 let latestVersion = null;
 
 function formatVersion(v) {
@@ -1649,14 +1798,16 @@ function setVersionState(state) {
     unknown: `Couldn't check for updates (offline?). Running ${formatVersion(VERSION)}.`,
     updating: "Updating…",
   };
-  versionBtn.dataset.state = state;
-  versionBtn.title = labels[state];
-  versionBtn.setAttribute("aria-label", labels[state]);
-  versionBtn.querySelector("span").textContent = state === "stale" ? "Update" : "";
+  for (const b of versionBtns) {
+    b.dataset.state = state;
+    b.title = labels[state];
+    b.setAttribute("aria-label", labels[state]);
+    b.querySelector("span").textContent = state === "stale" ? "Update" : "";
+  }
 }
 
 async function checkVersion() {
-  if (versionBtn.dataset.state === "updating") return;
+  if (versionBtns[0].dataset.state === "updating") return;
   try {
     const res = await fetch(`version.js?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
@@ -1669,10 +1820,11 @@ async function checkVersion() {
   }
 }
 
-versionBtn.addEventListener("click", async () => {
-  const state = versionBtn.dataset.state;
+const onVersionClick = async (e) => {
+  const btn = e.currentTarget;
+  const state = btn.dataset.state;
   if (state !== "stale") {
-    toast(versionBtn.title);
+    toast(btn.title);
     if (state === "unknown") checkVersion();
     return;
   }
@@ -1682,7 +1834,8 @@ versionBtn.addEventListener("click", async () => {
   // Refresh every file in the HTTP cache first; a plain reload could still use the stale copies.
   await Promise.all(APP_FILES.map((f) => fetch(f, { cache: "reload" }).catch(() => {})));
   location.reload();
-});
+};
+for (const b of versionBtns) b.addEventListener("click", onVersionClick);
 
 setVersionState("checking");
 checkVersion();

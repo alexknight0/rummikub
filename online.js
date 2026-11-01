@@ -17,16 +17,23 @@
 // read the pool order (or, for the host, the opening hands) with developer
 // tools; that's accepted for games among friends.
 //
-// Uses globals from app.js: S, applyRemote, onlineResults, resumeLocal,
-// loadLocalGame, openHome, closeHome, pageOpen, row, toast, requestAIMove,
-// aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, pace, MODE_KEY.
+// It also syncs the signed-in player's games on this device (against the
+// computer / pass and play) between their devices:
+//   users/{uid}/games/{id}: {state: JSON of the game (as app.js stores it,
+//     without the undo history), updated (ms), deleted (bool)}
+// The newest copy (by `updated`) wins; a removed game leaves deleted: true so
+// other devices remove it too.
+//
+// Uses globals from app.js: S, Store, GAME_PREFIX, applyRemote, onlineResults,
+// resumeLocal, route, openGame, goLobby, pageOpen, renderLocalGames, row,
+// toast, requestAIMove, aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, pace.
 //
 // A player who resigns keeps their seat with seats[i].resigned = true; turns
 // skip them, and the game ends when one player (or no person) is left.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
-import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, addDoc, getDoc } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, addDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBiB5Jk4IxiYqwvvsfk5A6-n_ia3tBpRVg",
@@ -37,7 +44,6 @@ const firebaseConfig = {
   appId: "1:226803527375:web:6e6d74390f22f3e1be51ba",
 };
 
-const GAME_KEY = "rummikub:onlineGame";
 const LOBBY_MAX_AGE_MS = 24 * 3600_000;
 const AI_BACKUP_DELAY_MS = 8000; // other players' devices take over computer turns after this
 
@@ -52,12 +58,14 @@ let lobbyData = { open: [], mine: [] };
 let cur = null; // {id, g, hand, seat, unsubs}
 let aiTimer = null;
 let resultsFor = null;
+let pendingGame = null; // online game in the URL, waiting for sign-in to load
 
 const gameRef = (id) => doc(db, "games", id);
 const handRef = (id, h) => doc(db, "games", id, "hands", h);
 const poolRef = (id) => doc(db, "games", id, "secret", "pool");
 const firstName = (u) => (u.displayName || u.email || "Player").split(/[\s@]/)[0].slice(0, 14);
 const meSeat = () => ({ uid: user.uid, name: firstName(user), photo: user.photoURL || null, type: "human" });
+const gameScreenHidden = () => $("#game-screen").hidden;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- sign-in
@@ -156,8 +164,8 @@ function renderLobby() {
     const others = g.seats.filter((s) => s.uid !== user.uid).map((s) => s.name || "?").join(", ");
     const buttons = [];
     if (g.status === "playing" && !meIn?.resigned) buttons.push(["Resign", () => resign(g), "danger"]);
-    buttons.push(["Open", () => enterGame(g.id), "primary"]);
-    const cls = (S?.online?.id === g.id || cur?.id === g.id ? "current " : "") + (yours ? "yours" : "");
+    buttons.push(["Open", () => openGame("online", g.id), "primary"]);
+    const cls = (lastGameHash === `#online=${g.id}` ? "current " : "") + (yours ? "yours" : "");
     mineBox.appendChild(row(`vs ${others || "nobody yet"}`, sub, buttons, cls));
   }
   const open = lobbyData.open
@@ -193,7 +201,7 @@ async function createGame() {
       status: "open", host: user.uid, hostName: firstName(user), created: now, updated: now,
       timer: Number($("#create-timer").value), seats, playerUids: [user.uid],
     });
-    enterGame(ref.id);
+    openGame("online", ref.id);
   } catch (e) {
     console.warn(e);
     toast("Couldn't create the game. Check your connection.");
@@ -214,7 +222,7 @@ async function joinGame(id) {
       seats[i] = meSeat();
       tx.update(gameRef(id), { seats, playerUids: [...g.playerUids, user.uid], updated: Date.now() });
     });
-    enterGame(id);
+    openGame("online", id);
   } catch (e) {
     console.warn(e);
     toast(e.message?.startsWith("That game") ? e.message : "Couldn't join. Check your connection.");
@@ -287,8 +295,7 @@ async function leaveRoom() {
   } catch (e) {
     console.warn(e);
   }
-  leaveView();
-  openHome();
+  goLobby();
 }
 
 async function resign(g) {
@@ -323,30 +330,32 @@ async function resign(g) {
 
 // ---------------------------------------------------------------- following a game
 
-function enterGame(id) {
-  closeHome();
+// Follows the online game shown in the URL (called by route() in app.js).
+function followGame(id) {
+  if (!user) {
+    pendingGame = id; // onAuthStateChanged picks it up
+    return;
+  }
+  pendingGame = null;
   if (cur?.id === id) { // already following it
     if (cur.g?.status === "open") renderRoom(cur.g);
     return;
   }
   leaveView();
-  localStorage.setItem(GAME_KEY, id);
-  localStorage.setItem(MODE_KEY, "online");
   cur = { id, g: null, hand: null, seat: -1, unsubs: [] };
   const mine = cur;
   cur.unsubs.push(onSnapshot(gameRef(id), (snap) => {
     if (cur !== mine) return;
     if (!snap.exists()) {
       toast("The host cancelled that game.");
-      leaveView();
-      return openHome();
+      return goLobby({ replace: true });
     }
     const g = snap.data();
     cur.g = g;
     cur.seat = g.seats.findIndex((s) => s.uid === user.uid);
     if (cur.seat < 0) {
-      leaveView();
-      return openHome();
+      toast("You're not in that game.");
+      return goLobby({ replace: true });
     }
     if (g.status === "open") return renderRoom(g);
     if ($("#room").open) $("#room").close();
@@ -369,9 +378,97 @@ function leaveView() {
   clearTimeout(aiTimer);
   if (cur) for (const u of cur.unsubs) u();
   cur = null;
-  localStorage.removeItem(GAME_KEY);
   if ($("#room").open) $("#room").close();
 }
+
+// ---------------------------------------------------------------- syncing games on this device
+
+const PUSH_DELAY_MS = 1500;
+const cloudRef = (id) => doc(db, "users", user.uid, "games", id);
+const pushTimers = new Map(); // game id -> timeout
+const remoteSeen = new Map(); // game id -> `updated` of the copy in Firestore
+let cloudUnsub = null;
+
+// Called by app.js after every change to a game; uploads it shortly after.
+function queue(id) {
+  if (!user) return;
+  clearTimeout(pushTimers.get(id));
+  pushTimers.set(id, setTimeout(() => push(id), PUSH_DELAY_MS));
+}
+
+async function push(id) {
+  pushTimers.delete(id);
+  if (!user) return;
+  const g = Store.get(id);
+  if (!g || (remoteSeen.get(id) ?? -1) >= g.updated) return;
+  try {
+    await setDoc(cloudRef(id), { state: Store.pack({ ...g, history: [] }), updated: g.updated, deleted: false });
+    remoteSeen.set(id, g.updated);
+  } catch (e) {
+    console.warn("couldn't sync game", id, e);
+  }
+}
+
+function flushPushes() {
+  for (const [id, t] of pushTimers) {
+    clearTimeout(t);
+    push(id);
+  }
+}
+
+async function removeRemote(id) {
+  if (!user) return;
+  try {
+    await setDoc(cloudRef(id), { state: "", updated: Date.now(), deleted: true });
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+function startSync() {
+  stopSync();
+  cloudUnsub = onSnapshot(collection(db, "users", user.uid, "games"), (snap) => {
+    const tomb = Store.tombstones();
+    const remote = new Set();
+    let changed = false;
+    for (const d of snap.docs) {
+      const id = d.id;
+      const r = d.data();
+      remote.add(id);
+      remoteSeen.set(id, r.updated);
+      const local = Store.get(id);
+      if (r.deleted) {
+        if (local && local.updated <= r.updated) {
+          Store.remove(id);
+          changed = true;
+          if (S && !S.online && S.id === id) goLobby({ replace: true });
+        }
+        continue;
+      }
+      if (tomb[id] && tomb[id] >= r.updated) { removeRemote(id); continue; } // removed here
+      if (!local || r.updated > local.updated) {
+        const g = Store.unpack(r.state);
+        if (!g) continue;
+        g.updated = r.updated;
+        Store.put(g);
+        changed = true;
+        // A newer copy of the game on screen, played on another device.
+        if (S && !S.online && S.id === id) resumeLocal(g);
+      }
+    }
+    // Upload games the account doesn't have yet, or has an older copy of.
+    for (const g of Store.all()) if (!remote.has(g.id) || g.updated > (remoteSeen.get(g.id) ?? 0)) queue(g.id);
+    if (changed) renderLocalGames();
+  }, (e) => console.warn("game sync stopped", e));
+}
+
+function stopSync() {
+  cloudUnsub?.();
+  cloudUnsub = null;
+}
+
+document.addEventListener("visibilitychange", () => document.hidden && flushPushes());
+window.addEventListener("pagehide", flushPushes);
 
 // The game doc and this player's hand arrive separately; a move that changed
 // both is shown once both have arrived.
@@ -527,32 +624,35 @@ $("#create-form").onsubmit = (e) => {
 };
 $("#room-start").onclick = startGame;
 $("#room-leave").onclick = leaveRoom;
-$("#room-lobby").onclick = () => {
-  $("#room").close();
-  openHome();
-};
+$("#room-lobby").onclick = () => goLobby();
 // Escape on the waiting room just closes it; reopen it from the lobby.
 $("#room").addEventListener("cancel", (e) => e.preventDefault());
 
-window.Online = { pageOpened, pageClosed, leaveView, play, draw, skip, resignCurrent: () => cur?.g && resign({ id: cur.id, ...cur.g }) };
+window.Online = { pageOpened, pageClosed, leaveView, followGame, play, draw, skip, resignCurrent: () => cur?.g && resign({ id: cur.id, ...cur.g }) };
+window.Cloud = { queue, remove: removeRemote, signedIn: () => !!user };
+
+// app.js routed before this module loaded: pick up an online game in the URL.
+{
+  const m = location.hash.match(/^#online=([\w-]+)$/);
+  if (m && !gameScreenHidden()) pendingGame = m[1];
+}
 
 let first = true;
 onAuthStateChanged(auth, (u) => {
   user = u;
   renderAccount();
-  if (first) {
-    first = false;
-    // Reopen the online game the page was showing, if any.
-    if (localStorage.getItem(MODE_KEY) === "online") {
-      const id = localStorage.getItem(GAME_KEY);
-      if (u && id) enterGame(id);
-      else {
-        const saved = loadLocalGame();
-        if (saved && u) resumeLocal(saved);
-        else openHome();
-      }
-    }
+  if (u) startSync();
+  else stopSync();
+  // An online game in the URL (e.g. after a reload) can load now.
+  if (u && pendingGame) followGame(pendingGame);
+  else if (!u && (pendingGame || cur)) {
+    pendingGame = null;
+    if (first) toast("Sign in to open online games.");
+    goLobby({ replace: true });
   }
-  if (pageOpen()) subscribeLobby();
-  if (!u && cur) leaveView();
+  first = false;
+  if (pageOpen()) {
+    subscribeLobby();
+    renderLocalGames();
+  }
 });

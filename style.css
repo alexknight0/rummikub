@@ -33,10 +33,14 @@ html, body {
 }
 
 body {
-  display: flex;
-  flex-direction: column;
   height: 100dvh;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+#game-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
@@ -383,14 +387,14 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 /* ---------- games page ---------- */
 
 #games-page {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
+  height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg);
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   user-select: text;
 }
+.small { font-size: 13px; margin: 6px 2px 8px; }
+#local-games { margin-top: 6px; }
 .page-head {
   position: sticky;
   top: 0;
@@ -416,7 +420,9 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 .page-body { max-width: 560px; margin: 0 auto; padding: 4px 14px 30px; }
 #games-page h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
 #games-page h4 { font-size: 14px; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
-#account { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+#account { display: flex; align-items: center; gap: 6px; font-size: 14px; white-space: nowrap; }
+.back, #account .link { white-space: nowrap; }
+@media (max-width: 420px) { #account span { display: none; } }
 #account img { width: 26px; height: 26px; border-radius: 50%; }
 .wide { width: 100%; padding: 11px; }
 #create-form { margin-top: 8px; padding: 4px 12px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
@@ -438,7 +444,7 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 /* ---------- landscape phone: players left, buttons right (like the app) ---------- */
 
 @media (orientation: landscape) and (max-height: 500px) {
-  body {
+  #game-screen {
     display: grid;
     grid-template-columns: auto 1fr auto;
     grid-template-rows: 1fr auto;

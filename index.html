@@ -10,6 +10,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Two screens: the Games screen (home) and a game. app.js switches between
+       them from the URL: no hash = Games, #local=<id> or #online=<id> = a game. -->
+  <div id="game-screen" hidden>
   <header id="hud">
     <!-- In a game, home goes to the Games screen (app.js); that screen's own home link goes to the home page. -->
     <a class="home-link" id="hud-home" href="../home/" aria-label="Games" title="Games"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-5.5h3V20h5V9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
@@ -38,6 +41,7 @@
   </div>
 
   <section id="rack-wrap"><div id="rack"></div></section>
+  </div>
 
   <div id="drag-layer"></div>
   <div id="toast" hidden></div>
@@ -93,14 +97,17 @@
 
   <section id="games-page" hidden>
     <header class="page-head">
-      <button type="button" id="page-back" class="back">← Back to game</button>
+      <button type="button" id="page-back" class="back" hidden title="Back to game">← Game</button>
       <a class="home-link" href="../home/" aria-label="Home page (all sites)" title="Home page (all sites)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-5.5h3V20h5V9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
       <h1>Games</h1>
       <div id="account"></div>
+      <button id="version-lobby" type="button" class="version" data-state="checking" aria-label="Checking for updates…" title="Checking for updates…"><i></i><span></span></button>
       <button type="button" id="settings-btn" class="gear" aria-label="Settings" title="Settings">⚙</button>
     </header>
     <div class="page-body">
-      <h3>On this device</h3>
+      <h3>Against the computer / on this device</h3>
+      <button type="button" id="new-local" class="primary wide">+ New game</button>
+      <p id="local-sync-note" class="muted small"></p>
       <ul id="local-games" class="games"></ul>
 
       <h3>Online</h3>
