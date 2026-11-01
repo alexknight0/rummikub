@@ -23,7 +23,7 @@ const DRAW_MS = 650;
 const AI_MIN_THINK_MS = 0;
 const AI_START_MS = 0;
 const AI_AFTER_MS = 0; // after a computer move (or your draw), before the next turn starts
-const AI_STAGGER_MS = 650; // between its tiles flying onto the table
+const AI_STAGGER_MS = 275; // between its tiles flying onto the table
 const AVATAR_COLOURS = ["#3b7dd8", "#d0533f", "#3aa168", "#9b59b6"];
 const DEFAULT_SETTINGS = {
   players: [{ name: "You", type: "human" }, { name: "Computer", type: "hard" }],
