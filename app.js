@@ -1275,20 +1275,33 @@ const LONG_PRESS_MS = 380;
 // thumb moves a few pixels, so touch needs more slack than a mouse.
 const dragSlop = (e) => (e.pointerType === "mouse" ? 5 : 14);
 
-// The tiles that move together with `id` on a long press: its set on the
-// table, or, in the rack, `id` plus the tiles to its right in the same row for
-// as long as they could still be part of one meld (same number in different
-// colours, or consecutive numbers in one colour; jokers fit either).
+// The tiles that move together with `id` on a long press (or double-tap):
+// `id` plus the tiles to its right in the same row (on the table or in the
+// rack), for as long as they could still be part of one meld with it (same
+// number in different colours, or consecutive numbers in one colour; jokers
+// fit either). Tiles to its left are never included.
 function groupOf(id) {
-  if (id in S.board) return getSets(S.board).find((s) => s.ids.includes(id)).ids;
-  const rack = S.players[viewerIndex()].rack;
-  const bySlot = new Map(keys(rack).map((t) => [rack[t], t]));
-  const slot = rack[id];
-  const rowEnd = slot - (slot % L.rackCols) + L.rackCols;
+  const onBoard = id in S.board;
+  const next = new Map(); // tile id -> the tile directly to its right
+  if (onBoard) {
+    const occ = boardOcc();
+    for (const t of keys(S.board)) {
+      const [r, c] = S.board[t];
+      const right = occ.get(r * 1000 + c + 1);
+      if (right !== undefined) next.set(t, right);
+    }
+  } else {
+    const rack = S.players[viewerIndex()].rack;
+    const bySlot = new Map(keys(rack).map((t) => [rack[t], t]));
+    for (const t of keys(rack)) {
+      const s = rack[t];
+      if ((s + 1) % L.rackCols !== 0 && bySlot.has(s + 1)) next.set(t, bySlot.get(s + 1));
+    }
+  }
   const ids = [id];
-  for (let s = slot + 1; s < rowEnd && bySlot.has(s); s++) {
-    if (!couldBeMeld([...ids, bySlot.get(s)].map(tile))) break;
-    ids.push(bySlot.get(s));
+  for (let t = next.get(id); t !== undefined; t = next.get(t)) {
+    if (!couldBeMeld([...ids, t].map(tile))) break;
+    ids.push(t);
   }
   return ids;
 }
