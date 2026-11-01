@@ -773,12 +773,21 @@ function tryLayout(sets, old, rows, cols) {
     if (it.anchor && fits(it.anchor[0], it.anchor[1], it.ids.length)) put(it.anchor[0], it.anchor[1], it.ids);
     else rest.push(it);
   }
+  // New sets go in the free spot closest to a point a little below the middle
+  // of the table, so they land near the rack instead of at the far top edge.
+  const ty = Math.min(rows, L.rows - 1) * 0.6;
+  const tx = cols / 2;
   for (const it of rest) {
-    let done = false;
-    for (let r = 0; r < rows && !done; r++)
-      for (let c = 0; c + it.ids.length <= cols && !done; c++)
-        if (fits(r, c, it.ids.length)) { put(r, c, it.ids); done = true; }
-    if (!done) return null;
+    const len = it.ids.length;
+    let best = null;
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c + len <= cols; c++) {
+        if (!fits(r, c, len)) continue;
+        const d = Math.hypot((r + 0.5 - ty) * 1.3, c + len / 2 - tx);
+        if (!best || d < best.d) best = { r, c, d };
+      }
+    if (!best) return null;
+    put(best.r, best.c, it.ids);
   }
   return out;
 }
