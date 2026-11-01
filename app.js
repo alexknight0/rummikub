@@ -1522,7 +1522,7 @@ const gamesPage = $("#games-page");
 const gameScreen = $("#game-screen");
 const pageOpen = () => !gamesPage.hidden;
 const onGameScreen = () => !gameScreen.hidden;
-let lastGameHash = null; // for "Back to game" on the Games screen
+let lastGameHash = null; // the game you just left; outlined in the Games list
 
 // Changes the URL (unless it's already `hash`) and shows that screen.
 // History entries let the phone's back button go from a game to Games.
@@ -1653,7 +1653,6 @@ function renderLocalGames() {
   $("#local-sync-note").textContent = window.Cloud?.signedIn()
     ? "Synced with your Google account, so they're on your other devices too."
     : "Sign in below to have these on your other devices too.";
-  $("#page-back").hidden = !lastGameHash;
 }
 
 // ---------------------------------------------------------------- dialogs
@@ -1744,7 +1743,6 @@ function init() {
   $("#hud-home").onclick = (e) => { e.preventDefault(); goLobby(); };
   $("#new-local").onclick = () => openSetup();
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
-  $("#page-back").onclick = () => lastGameHash && (showScreen("game", lastGameHash), route());
   $("#settings-btn").onclick = () => {
     $("#pref-fast").checked = prefs.fast;
     $(`input[name=pref-pickup][value=${prefs.pickup}]`).checked = true;
