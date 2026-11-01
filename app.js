@@ -18,7 +18,12 @@ const SETTINGS_KEY = "rummikub:settings";
 const RACK_MIN_ROWS = 2;
 const ANIM_MS = 320;
 const DRAW_MS = 650;
-const AI_MIN_THINK_MS = 900;
+// The computer's moves take ~1 ms; these short pauses are only so you can see
+// what it did. Animations keep their full length and finish during the next turn.
+const AI_MIN_THINK_MS = 250;
+const AI_START_MS = 100;
+const AI_AFTER_MS = 300; // after a computer move, before the next turn starts
+const AI_STAGGER_MS = 50; // between its tiles flying onto the table
 const AVATAR_COLOURS = ["#3b7dd8", "#d0533f", "#3aa168", "#9b59b6"];
 const DEFAULT_SETTINGS = {
   players: [{ name: "You", type: "human" }, { name: "Computer", type: "hard" }],
@@ -471,7 +476,7 @@ function startTurn() {
   } else covered = false;
   save();
   render();
-  if (p.type !== "human") later(runAI, 350);
+  if (p.type !== "human") later(runAI, AI_START_MS);
 }
 
 // No timer when only one person is playing (the rest are computers).
@@ -543,7 +548,7 @@ function humanDraw() {
   } else S.passes = 0;
   save();
   render(id === null ? {} : { from: new Map([[id, $("#pool").getBoundingClientRect()]]), flip: new Set([id]) });
-  later(endTurn, DRAW_MS + 100);
+  later(endTurn, AI_AFTER_MS); // the drawn tile finishes flying in during the next turn
 }
 
 function endTurn() {
@@ -705,14 +710,14 @@ function applyAI(pi, res) {
     }
     save();
     render();
-    later(endTurn, DRAW_MS);
+    later(endTurn, AI_AFTER_MS);
     return;
   }
   const from = new Map();
   const stagger = new Map();
   res.placed.forEach((id, i) => {
     from.set(id, chip);
-    stagger.set(id, i * 90);
+    stagger.set(id, i * AI_STAGGER_MS);
     delete p.rack[id];
   });
   S.board = layoutSets(res.sets, S.board);
@@ -721,7 +726,7 @@ function applyAI(pi, res) {
   S.passes = 0;
   save();
   render({ from, flip: new Set(res.placed), stagger });
-  later(endTurn, DRAW_MS + res.placed.length * 90);
+  later(endTurn, AI_AFTER_MS + res.placed.length * AI_STAGGER_MS);
 }
 
 // Positions the computer's new table. Sets keep their old spot when they can
@@ -820,7 +825,7 @@ function applyRemote(id, g, hand, me) {
         if (t in same.board) continue;
         from.set(t, chip);
         flip.add(t);
-        stagger.set(t, i++ * 90);
+        stagger.set(t, i++ * AI_STAGGER_MS);
       }
     } else if (m !== me.seat && g.lastMove.kind === "draw") faceDownTo = m;
     for (const t of hand) {
