@@ -94,6 +94,7 @@
       <button type="button" id="page-back" class="back">← Back to game</button>
       <h1>Games</h1>
       <div id="account"></div>
+      <button type="button" id="settings-btn" class="gear" aria-label="Settings" title="Settings">⚙</button>
     </header>
     <div class="page-body">
       <h3>On this device</h3>
@@ -132,6 +133,20 @@
         <h4>Open games</h4>
         <ul id="open-games" class="games"></ul>
       </div>
+    </div>
+  </section>
+
+  <section id="settings-page" hidden>
+    <header class="page-head">
+      <button type="button" id="settings-back" class="back">← Back</button>
+      <h1>Settings</h1>
+    </header>
+    <div class="page-body">
+      <h3>Computer players</h3>
+      <label class="toggle">
+        <input type="checkbox" id="pref-fast">
+        <span><b>Fast mode</b><small>The computer plays straight away, with no pauses before or after its turn. Its tiles still fly onto the table one by one.</small></span>
+      </label>
     </div>
   </section>
 

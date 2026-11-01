@@ -19,7 +19,7 @@
 //
 // Uses globals from app.js: S, applyRemote, onlineResults, resumeLocal,
 // loadLocalGame, openHome, closeHome, pageOpen, row, toast, requestAIMove,
-// aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, AI_MIN_THINK_MS, MODE_KEY.
+// aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, pace, MODE_KEY.
 //
 // A player who resigns keeps their seat with seats[i].resigned = true; turns
 // skip them, and the game ends when one player (or no person) is left.
@@ -496,7 +496,7 @@ async function runAITurn(id, moveNo) {
   const tiles = (await getDoc(handRef(id, hand))).data().tiles;
   const t0 = performance.now();
   const res = await requestAIMove(S.board, tiles, g.melded[seat], p.type);
-  await sleep(Math.max(0, AI_MIN_THINK_MS - (performance.now() - t0)));
+  await sleep(Math.max(0, pace().think - (performance.now() - t0)));
   if (cur?.id !== id || cur.g.moveNo !== moveNo) return;
   const legal = res && aiMoveIsLegal({ rack: Object.fromEntries(tiles.map((t) => [t, 0])), melded: g.melded[seat] }, res);
   if (res && !legal) console.warn("AI produced an illegal move; drawing instead", res);

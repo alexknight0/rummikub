@@ -18,12 +18,21 @@ const SETTINGS_KEY = "rummikub:settings";
 const RACK_MIN_ROWS = 2;
 const ANIM_MS = 320;
 const DRAW_MS = 650;
-// The computer's moves take ~1 ms; these short pauses are only so you can see
-// what it did. Animations keep their full length and finish during the next turn.
-const AI_MIN_THINK_MS = 0;
-const AI_START_MS = 0;
-const AI_AFTER_MS = 0; // after a computer move (or your draw), before the next turn starts
-const AI_STAGGER_MS = 275; // between its tiles flying onto the table
+// Computer-turn pacing (ms). Its moves take ~1 ms to work out; the pauses are
+// only so you can follow what it did. Animations keep their full length and
+// finish during the next turn. "Fast mode" in Settings drops the pauses.
+const PREFS_KEY = "rummikub:prefs";
+const PACE = {
+  normal: { start: 100, think: 250, after: 100, stagger: 275 },
+  fast: { start: 0, think: 0, after: 0, stagger: 275 },
+};
+let prefs = { fast: false };
+try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem(PREFS_KEY)) }; } catch { /* defaults */ }
+const pace = () => PACE[prefs.fast ? "fast" : "normal"];
+function setPref(k, v) {
+  prefs[k] = v;
+  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+}
 const AVATAR_COLOURS = ["#3b7dd8", "#d0533f", "#3aa168", "#9b59b6"];
 const DEFAULT_SETTINGS = {
   players: [{ name: "You", type: "human" }, { name: "Computer", type: "hard" }],
@@ -474,7 +483,7 @@ function startTurn() {
   } else covered = false;
   save();
   render();
-  if (p.type !== "human") later(runAI, AI_START_MS);
+  if (p.type !== "human") later(runAI, pace().start);
 }
 
 // No timer when only one person is playing (the rest are computers).
@@ -546,7 +555,7 @@ function humanDraw() {
   } else S.passes = 0;
   save();
   render(id === null ? {} : { from: new Map([[id, $("#pool").getBoundingClientRect()]]), flip: new Set([id]) });
-  later(endTurn, AI_AFTER_MS); // the drawn tile finishes flying in during the next turn
+  later(endTurn, pace().after); // the drawn tile finishes flying in during the next turn
 }
 
 function endTurn() {
@@ -666,7 +675,7 @@ async function runAI() {
   const t0 = performance.now();
   const result = await requestAIMove(S.board, keys(p.rack), p.melded, p.type);
   if (token !== gameToken) return;
-  later(() => S.turn === pi && !S.over && applyAI(pi, result), Math.max(0, AI_MIN_THINK_MS - (performance.now() - t0)));
+  later(() => S.turn === pi && !S.over && applyAI(pi, result), Math.max(0, pace().think - (performance.now() - t0)));
 }
 
 // p: {rack: {id: slot}, melded}; checks a computer move against the table in S.
@@ -708,14 +717,14 @@ function applyAI(pi, res) {
     }
     save();
     render();
-    later(endTurn, AI_AFTER_MS);
+    later(endTurn, pace().after);
     return;
   }
   const from = new Map();
   const stagger = new Map();
   res.placed.forEach((id, i) => {
     from.set(id, chip);
-    stagger.set(id, i * AI_STAGGER_MS);
+    stagger.set(id, i * pace().stagger);
     delete p.rack[id];
   });
   S.board = layoutSets(res.sets, S.board);
@@ -724,7 +733,7 @@ function applyAI(pi, res) {
   S.passes = 0;
   save();
   render({ from, flip: new Set(res.placed), stagger });
-  later(endTurn, AI_AFTER_MS + res.placed.length * AI_STAGGER_MS);
+  later(endTurn, pace().after + res.placed.length * pace().stagger);
 }
 
 // Positions the computer's new table. Sets keep their old spot when they can
@@ -823,7 +832,7 @@ function applyRemote(id, g, hand, me) {
         if (t in same.board) continue;
         from.set(t, chip);
         flip.add(t);
-        stagger.set(t, i++ * AI_STAGGER_MS);
+        stagger.set(t, i++ * pace().stagger);
       }
     } else if (m !== me.seat && g.lastMove.kind === "draw") faceDownTo = m;
     for (const t of hand) {
@@ -1381,6 +1390,7 @@ function openHome() {
 }
 
 function closeHome() {
+  $("#settings-page").hidden = true;
   if (gamesPage.hidden) return;
   gamesPage.hidden = true;
   window.Online?.pageClosed();
@@ -1510,6 +1520,12 @@ function init() {
   $("#menu-btn").onclick = openHome;
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
   $("#page-back").onclick = closeHome;
+  $("#settings-btn").onclick = () => {
+    $("#pref-fast").checked = prefs.fast;
+    $("#settings-page").hidden = false;
+  };
+  $("#settings-back").onclick = () => { $("#settings-page").hidden = true; };
+  $("#pref-fast").onchange = (e) => setPref("fast", e.target.checked);
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
