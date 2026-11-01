@@ -26,7 +26,7 @@ const PACE = {
   normal: { start: 100, think: 250, after: 100, stagger: 275 },
   fast: { start: 0, think: 0, after: 0, stagger: 275 },
 };
-let prefs = { fast: false };
+let prefs = { fast: false, pickup: "hold" }; // pickup: "hold" or "doubletap"
 try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem(PREFS_KEY)) }; } catch { /* defaults */ }
 const pace = () => PACE[prefs.fast ? "fast" : "normal"];
 function setPref(k, v) {
@@ -471,6 +471,7 @@ function drawTile(pi) {
 // ---------------------------------------------------------------- turns
 
 function startTurn() {
+  selection = null;
   const p = cur();
   S.turnStart = { board: clone(S.board), rack: clone(p.rack) };
   S.history = [];
@@ -1024,6 +1025,7 @@ function render(opts = {}) {
     el.classList.toggle("recent", recent.has(id) && !(id in fresh));
     el.classList.toggle("invalid", invalid.has(id));
     el.classList.toggle("locked", !canDrag(id));
+    el.classList.toggle("selected", !!selection && selection.includes(id));
   };
   for (const id of keys(S.board)) {
     const [r, c] = S.board[id];
@@ -1294,10 +1296,24 @@ function couldBeMeld(tiles) {
   return s >= 1 && s + tiles.length - 1 <= 13 && tiles.every((t, i) => isJoker(t) || t.n === s + i);
 }
 
+// "doubletap" setting: tapping a tile twice selects its set (outlined); then
+// dragging any selected tile moves them all. Tapping anything else clears it.
+const DOUBLE_TAP_MS = 350;
+let lastTap = null; // {id, t}
+let selection = null; // tile ids
+
+function setSelection(ids) {
+  selection = ids;
+  for (const [id, el] of els) el.classList.toggle("selected", !!ids && ids.includes(id));
+}
+
 function onPointerDown(e) {
   if (drag || e.button > 0) return;
   const el = e.target.closest(".tile");
-  if (!el || el.parentNode === dragLayer) return;
+  if (!el || el.parentNode === dragLayer) {
+    if (selection && !e.target.closest("button")) setSelection(null);
+    return;
+  }
   const id = Number(el.dataset.id);
   if (!canDrag(id)) {
     if (isHumanTurn() && id in S.board && !cur().melded)
@@ -1307,9 +1323,24 @@ function onPointerDown(e) {
   e.preventDefault();
   const r = el.getBoundingClientRect();
   drag = { id, ids: [id], idx: 0, pointerId: e.pointerId, slop: dragSlop(e), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
-  // Holding still picks up the whole set (on the table or in the rack).
   const group = groupOf(id);
-  if (group.length > 1 && group.every(canDrag)) {
+  const groupOk = group.length > 1 && group.every(canDrag);
+  if (prefs.pickup === "doubletap") {
+    if (selection?.includes(id) && selection.every(canDrag)) {
+      drag.ids = selection;
+      drag.idx = selection.indexOf(id);
+    } else if (groupOk && lastTap?.id === id && performance.now() - lastTap.t < DOUBLE_TAP_MS) {
+      lastTap = null;
+      navigator.vibrate?.(15);
+      setSelection(group);
+      drag.ids = group;
+      drag.idx = group.indexOf(id);
+      drag.selecting = true; // this tap made the selection; don't count it as a first tap
+    } else if (selection) setSelection(null);
+    return;
+  }
+  // Holding still picks up the whole set (on the table or in the rack).
+  if (groupOk) {
     const d = drag;
     d.timer = setTimeout(() => {
       if (drag !== d || d.active) return;
@@ -1372,7 +1403,13 @@ function finishDrag(drop) {
   drag = null;
   clearTimeout(d.timer);
   hint.remove();
-  if (!d.active) return;
+  if (!d.active) {
+    // A tap: remember it so a second tap on the same tile selects its set.
+    if (drop && !d.selecting) lastTap = { id: d.id, t: performance.now() };
+    return;
+  }
+  setSelection(null);
+  lastTap = null;
   const from = new Map();
   d.els.forEach((el, i) => {
     el.classList.remove("dragging");
@@ -1535,10 +1572,12 @@ function init() {
   $("#page-back").onclick = closeHome;
   $("#settings-btn").onclick = () => {
     $("#pref-fast").checked = prefs.fast;
+    $(`input[name=pref-pickup][value=${prefs.pickup}]`).checked = true;
     $("#settings-page").hidden = false;
   };
   $("#settings-back").onclick = () => { $("#settings-page").hidden = true; };
   $("#pref-fast").onchange = (e) => setPref("fast", e.target.checked);
+  for (const r of document.querySelectorAll("input[name=pref-pickup]")) r.onchange = () => { setPref("pickup", r.value); setSelection(null); };
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
