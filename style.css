@@ -508,3 +508,7 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 .results-home { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
 #results .row button { white-space: nowrap; padding-inline: 13px; }
 .results-home svg { width: 18px; height: 18px; }
+
+/* Vertical dividers between the Games screen's header buttons. */
+.page-head .sep { width: 1px; height: 20px; flex: none; background: rgba(255, 255, 255, .18); }
+#account:empty + .sep { display: none; } /* signed out: nothing to divide */
