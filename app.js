@@ -1568,6 +1568,7 @@ function init() {
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
   $("#menu-btn").onclick = openHome;
+  $("#hud-home").onclick = (e) => { e.preventDefault(); openHome(); };
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
   $("#page-back").onclick = closeHome;
   $("#settings-btn").onclick = () => {

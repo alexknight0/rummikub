@@ -11,7 +11,8 @@
 </head>
 <body>
   <header id="hud">
-    <a class="home-link" href="../home/" aria-label="Home page (all sites)" title="Home page (all sites)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-5.5h3V20h5V9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <!-- In a game, home goes to the Games screen (app.js); that screen's own home link goes to the home page. -->
+    <a class="home-link" id="hud-home" href="../home/" aria-label="Games" title="Games"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-5.5h3V20h5V9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
     <div id="players"></div>
     <div id="pool" title="Tiles left in the pool"><span class="pool-stack"></span><span id="pool-count">0</span></div>
     <button id="version" type="button" class="version" data-state="checking" aria-label="Checking for updates…" title="Checking for updates…"><i></i><span></span></button>
