@@ -1265,20 +1265,33 @@ const LONG_PRESS_MS = 380;
 const dragSlop = (e) => (e.pointerType === "mouse" ? 5 : 14);
 
 // The tiles that move together with `id` on a long press: its set on the
-// table, or the tiles next to it in the same rack row.
+// table, or, in the rack, `id` plus the tiles to its right in the same row for
+// as long as they could still be part of one meld (same number in different
+// colours, or consecutive numbers in one colour; jokers fit either).
 function groupOf(id) {
   if (id in S.board) return getSets(S.board).find((s) => s.ids.includes(id)).ids;
   const rack = S.players[viewerIndex()].rack;
   const bySlot = new Map(keys(rack).map((t) => [rack[t], t]));
   const slot = rack[id];
-  const rowStart = slot - (slot % L.rackCols);
-  let a = slot;
-  let z = slot;
-  while (a - 1 >= rowStart && bySlot.has(a - 1)) a--;
-  while (z + 1 < rowStart + L.rackCols && bySlot.has(z + 1)) z++;
-  const ids = [];
-  for (let s = a; s <= z; s++) ids.push(bySlot.get(s));
+  const rowEnd = slot - (slot % L.rackCols) + L.rackCols;
+  const ids = [id];
+  for (let s = slot + 1; s < rowEnd && bySlot.has(s); s++) {
+    if (!couldBeMeld([...ids, bySlot.get(s)].map(tile))) break;
+    ids.push(bySlot.get(s));
+  }
   return ids;
+}
+
+// Whether these tiles, in this order, could be all or the start of a valid set.
+function couldBeMeld(tiles) {
+  const real = tiles.filter((t) => !isJoker(t));
+  if (!real.length) return tiles.length <= 2;
+  const group = tiles.length <= 4 && real.every((t) => t.n === real[0].n) && new Set(real.map((t) => t.c)).size === real.length;
+  if (group) return true;
+  if (!real.every((t) => t.c === real[0].c)) return false;
+  const i0 = tiles.findIndex((t) => !isJoker(t));
+  const s = tiles[i0].n - i0;
+  return s >= 1 && s + tiles.length - 1 <= 13 && tiles.every((t, i) => isJoker(t) || t.n === s + i);
 }
 
 function onPointerDown(e) {
