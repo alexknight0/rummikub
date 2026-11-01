@@ -503,3 +503,8 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
   .home-link:hover, .home-link:focus-visible { opacity: 1; }
 }
 .home-link svg { width: 20px; height: 20px; display: block; }
+
+/* Results box: "Games" on the left, the other buttons on the right. */
+.results-home { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
+#results .row button { white-space: nowrap; padding-inline: 13px; }
+.results-home svg { width: 18px; height: 18px; }

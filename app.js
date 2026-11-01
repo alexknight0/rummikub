@@ -1714,8 +1714,10 @@ function showResults() {
     tr.firstChild.textContent = S.players[i].name + (S.players[i].resigned ? " (resigned)" : "");
     $("#results-table").appendChild(tr);
   }
+  // Online, the second button already goes to Games.
   $("#results-again").hidden = !!S.online;
-  $("#results-new").textContent = S.online ? "All games" : "New game…";
+  $("#results-home").hidden = !!S.online;
+  $("#results-new").textContent = S.online ? "All games" : "New game";
   if (!$("#results").open) $("#results").showModal();
 }
 
@@ -1755,6 +1757,7 @@ function init() {
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
+  $("#results-home").onclick = () => goLobby();
   $("#results-again").onclick = () => { $("#results").close(); newGame(S.settings); };
   $("#results-new").onclick = () => {
     $("#results").close();
