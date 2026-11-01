@@ -576,7 +576,7 @@ function resignLocal() {
   p.resigned = true;
   if (left.length === 1 || !left.some((i) => S.players[i].type === "human")) {
     const winner = left.reduce((a, b) => (keys(S.players[b].rack).length < keys(S.players[a].rack).length ? b : a));
-    return gameOver(winner);
+    return gameOver(winner, true);
   }
   if (S.turn === pi) {
     gameToken++;
@@ -600,20 +600,26 @@ function onTimeout() {
   }
 }
 
-function gameOver(winner) {
+function gameOver(winner, quiet = false) {
   const vals = S.players.map((p) => keys(p.rack).reduce((a, id) => a + rackValue(tile(id)), 0));
   if (winner === null) {
     const inGame = S.players.map((p, i) => i).filter((i) => !S.players[i].resigned);
     winner = inGame.reduce((a, b) => (vals[b] < vals[a] ? b : a));
   }
-  const scores = vals.map((v) => -(v - vals[winner]));
-  scores[winner] = -scores.reduce((a, b) => a + b, 0);
-  S.over = { winner, vals, scores };
+  S.over = { winner, vals, scores: scoresFor(vals, winner), quiet };
   S.turnDeadline = null;
   busy = false;
   save();
   render();
-  later(showResults, 500);
+  if (quiet) openHome();
+  else later(showResults, 500);
+}
+
+// Rummikub scoring: each loser loses their rack total; the winner gains the sum.
+function scoresFor(vals, winner) {
+  const scores = vals.map((v, i) => (i === winner ? 0 : -v));
+  scores[winner] = -scores.reduce((a, b) => a + b, 0);
+  return scores;
 }
 
 // ---------------------------------------------------------------- computer players
@@ -870,11 +876,11 @@ function onlineResults(hands) {
     const inGame = S.players.map((p, i) => i).filter((i) => !S.players[i].resigned);
     winner = inGame.reduce((a, b) => (vals[b] < vals[a] ? b : a));
   }
-  const scores = vals.map((v) => -(v - vals[winner]));
-  scores[winner] = -scores.reduce((a, b) => a + b, 0);
-  S.over = { winner, vals, scores, left: hands.map((h) => h.length) };
+  const quiet = !!S.players[S.online.seat].resigned; // you resigned: no results box
+  S.over = { winner, vals, scores: scoresFor(vals, winner), left: hands.map((h) => h.length), quiet };
   render({ animate: false });
-  later(showResults, 500);
+  if (quiet) openHome();
+  else later(showResults, 500);
 }
 
 function resumeLocal(saved) {
@@ -890,7 +896,7 @@ function resumeLocal(saved) {
   buildChips();
   if (S.over) {
     render({ animate: false });
-    return showResults();
+    return S.over.quiet ? openHome() : showResults();
   }
   if (cur().type === "human") {
     covered = humanCount() > 1;
