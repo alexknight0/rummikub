@@ -1739,7 +1739,6 @@ function init() {
   $("#reset").onclick = resetTurn;
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
-  $("#menu-btn").onclick = () => goLobby();
   $("#hud-home").onclick = (e) => { e.preventDefault(); goLobby(); };
   $("#new-local").onclick = () => openSetup();
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
