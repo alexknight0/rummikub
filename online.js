@@ -84,7 +84,7 @@ async function signIn() {
 function renderAccount() {
   const box = $("#account");
   box.innerHTML = "";
-  $("#lobby-signin").hidden = !!user;
+  $("#lobby-signin").hidden = !!user || !$("#lobby-checking").hidden; // not until we know
   $("#lobby-body").hidden = !user;
   if (!user) return;
   if (user.photoURL) {
@@ -643,6 +643,7 @@ window.Cloud = { queue, remove: removeRemote, signedIn: () => !!user };
 let first = true;
 onAuthStateChanged(auth, (u) => {
   user = u;
+  $("#lobby-checking").hidden = true;
   renderAccount();
   if (u) startSync();
   else stopSync();

@@ -114,7 +114,12 @@
       <ul id="local-games" class="games"></ul>
 
       <h3>Online</h3>
-      <div id="lobby-signin">
+      <!-- Until online.js knows whether you're signed in. The "taking a while" line appears after 10 s by CSS alone. -->
+      <div id="lobby-checking" role="status">
+        <p class="muted"><span class="boot-spin" aria-hidden="true"></span>Checking sign-in…</p>
+        <p class="muted boot-slow">This is taking a while. <button type="button" class="link" onclick="location.reload()">Reload</button></p>
+      </div>
+      <div id="lobby-signin" hidden>
         <p class="muted">Sign in with Google to create a game or join friends' games.</p>
         <button type="button" id="signin" class="primary">Sign in with Google</button>
       </div>

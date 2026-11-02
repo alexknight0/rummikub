@@ -1651,7 +1651,7 @@ function renderLocalGames() {
     ul.appendChild(row(names, sub, buttons, `#local=${g.id}` === lastGameHash ? "current" : ""));
   }
   if (!games.length) ul.innerHTML = '<li class="empty">No games yet. Start one against the computer, or pass the phone around.</li>';
-  $("#local-sync-note").textContent = window.Cloud?.signedIn()
+  $("#local-sync-note").textContent = !$("#lobby-checking").hidden ? "" : window.Cloud?.signedIn()
     ? "Synced with your Google account, so they're on your other devices too."
     : "Sign in below to have these on your other devices too.";
 }
