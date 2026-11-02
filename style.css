@@ -492,16 +492,14 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
   #rack-wrap { grid-area: rack; padding: 4px 8px 6px; }
 }
 
-/* Link to the home page (alexknight0.github.io/home/), only in a normal browser tab with a mouse.
-   Hidden on phones/tablets and in installed apps, where it would open home inside this app. */
-.home-link { display: none; }
-@media (pointer: fine) and (display-mode: browser) {
-  .home-link {
-    display: inline-flex; align-items: center; flex: none; padding: 4px; border-radius: 6px;
-    color: inherit; opacity: 0.65;
-  }
-  .home-link:hover, .home-link:focus-visible { opacity: 1; }
+/* Home link (house) to /home/, on every device: in an installed app Android opens the
+   installed Home app. Bigger tap area on touch screens without changing the layout. */
+.home-link {
+  display: inline-flex; align-items: center; flex: none; padding: 4px; border-radius: 6px;
+  color: inherit; opacity: 0.65;
 }
+.home-link:hover, .home-link:focus-visible { opacity: 1; }
+@media (pointer: coarse) { .home-link { padding: 9px; margin: -5px; } }
 .home-link svg { width: 20px; height: 20px; display: block; }
 
 /* Results box: "Games" on the left, the other buttons on the right. */
@@ -512,5 +510,3 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 /* Vertical dividers between the Games screen's header buttons. */
 .page-head .sep { width: 1px; height: 20px; flex: none; background: rgba(255, 255, 255, .18); }
 #account:empty + .sep { display: none; } /* signed out: nothing to divide */
-.page-head .home-sep { display: none; } /* only when the home link shows */
-@media (pointer: fine) and (display-mode: browser) { .page-head .home-sep { display: block; } }
