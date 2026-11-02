@@ -1776,72 +1776,26 @@ function init() {
 }
 
 // ---------------------------------------------------------------- version check
-// VERSION (version.js) is the copy that's running; version.js fetched with no-store is
-// what GitHub Pages serves now. Pages lets browsers cache files for 10 min, so a stale
-// copy is common right after a deploy. The game is saved after every move, so updating
-// (which reloads the page) carries on where you left off.
+// The update light is shared by Alex's Pages sites (github.com/alexknight0/pages-common).
+// The game is saved after every move, so updating (which reloads the page) carries on
+// where you left off. Loaded dynamically so the game still runs if jsDelivr is unreachable.
 
-const APP_FILES = ["./", "index.html", "app.js", "online.js", "ai.js", "rules.js", "version.js", "style.css", "manifest.webmanifest", "icon.svg"];
-const VERSION_CHECK_MS = 5 * 60_000;
-const versionBtns = [...document.querySelectorAll(".version")]; // in a game and on the Games screen
-let latestVersion = null;
-
-function formatVersion(v) {
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? v : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
-}
-
-function setVersionState(state) {
-  const labels = {
-    checking: "Checking for updates…",
-    ok: `Up to date (version ${formatVersion(VERSION)})`,
-    stale: `Update available: running ${formatVersion(VERSION)}, latest is ${formatVersion(latestVersion)}. Tap to update.`,
-    unknown: `Couldn't check for updates (offline?). Running ${formatVersion(VERSION)}.`,
-    updating: "Updating…",
-  };
-  for (const b of versionBtns) {
-    b.dataset.state = state;
-    b.title = labels[state];
-    b.setAttribute("aria-label", labels[state]);
-    b.querySelector("span").textContent = state === "stale" ? "Update" : "";
-  }
-}
-
-async function checkVersion() {
-  if (versionBtns[0].dataset.state === "updating") return;
-  try {
-    const res = await fetch(`version.js?t=${Date.now()}`, { cache: "no-store" });
-    if (!res.ok) throw new Error(res.status);
-    latestVersion = (await res.text()).match(/VERSION = "([^"]+)"/)?.[1];
-    if (!latestVersion) throw new Error("no version");
-    // ISO timestamps compare as strings; only a newer live copy counts as an update.
-    setVersionState(latestVersion > VERSION ? "stale" : "ok");
-  } catch {
-    setVersionState("unknown");
-  }
-}
-
-const onVersionClick = async (e) => {
-  const btn = e.currentTarget;
-  const state = btn.dataset.state;
-  if (state !== "stale") {
-    toast(btn.title);
-    if (state === "unknown") checkVersion();
-    return;
-  }
-  setVersionState("updating");
-  cancelDrag();
-  if (S) save();
-  // Refresh every file in the HTTP cache first; a plain reload could still use the stale copies.
-  await Promise.all(APP_FILES.map((f) => fetch(f, { cache: "reload" }).catch(() => {})));
-  location.reload();
-};
-for (const b of versionBtns) b.addEventListener("click", onVersionClick);
-
-setVersionState("checking");
-checkVersion();
-setInterval(checkVersion, VERSION_CHECK_MS);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
-window.addEventListener("online", checkVersion);
+import("https://cdn.jsdelivr.net/gh/alexknight0/pages-common@1.0.0/update.js")
+  .then(({ initUpdateLight }) => initUpdateLight({
+    version: VERSION,
+    buttons: ".version", // in a game and on the Games screen
+    report: toast,
+    beforeUpdate() {
+      cancelDrag();
+      if (S) save();
+    },
+  }))
+  .catch((e) => {
+    console.warn("update light:", e);
+    for (const b of document.querySelectorAll(".version")) {
+      b.dataset.state = "unknown";
+      b.title = "Couldn't load the update check (offline?).";
+    }
+  });
 
 init();
