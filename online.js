@@ -32,7 +32,7 @@
 // skip them, and the game ends when one player (or no person) is left.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
+import { initializeAuth, browserLocalPersistence, browserPopupRedirectResolver, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, addDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -48,7 +48,10 @@ const LOBBY_MAX_AGE_MS = 24 * 3600_000;
 const AI_BACKUP_DELAY_MS = 8000; // other players' devices take over computer turns after this
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+// Sign-in is kept in localStorage, not Firebase's default IndexedDB: all of Alex's sites share
+// one origin and so one sign-in database, and Firebase waits forever if another site's page
+// blocks opening it (seen on Android 2026-11-02: blank page until site data was cleared).
+const auth = initializeAuth(app, { persistence: browserLocalPersistence, popupRedirectResolver: browserPopupRedirectResolver });
 const db = getFirestore(app);
 const $ = (sel) => document.querySelector(sel);
 
