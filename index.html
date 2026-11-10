@@ -78,28 +78,14 @@
     <div class="page-body">
       <section class="lobby-section local">
       <h2 class="lobby-title"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 18.5h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Local games</h2>
-      <p class="lobby-sub">On this device: against the computer, or pass the phone around.</p>
+      <p class="lobby-sub">Against the computer, on this device.</p>
       <button type="button" id="new-local" class="primary wide">+ New local game</button>
       <form id="setup" class="new-form" hidden>
-        <label class="field">Players
-          <select id="setup-players"><option>2</option><option>3</option><option>4</option></select>
+        <label class="field">Computer players
+          <select id="setup-ai"><option>1</option><option>2</option><option>3</option></select>
         </label>
-        <label class="field">Computer players <select id="setup-ai"><option>0</option></select></label>
-        <label class="field" id="setup-level-row">Computer level
+        <label class="field">Computer level
           <select id="setup-level"><option value="hard">Hard</option><option value="easy">Easy</option></select>
-        </label>
-        <div id="setup-names-row">
-          <p class="field-label">Names</p>
-          <div id="setup-names"></div>
-        </div>
-        <label class="field" id="setup-timer-row">Turn timer
-          <select id="setup-timer">
-            <option value="0">Off</option>
-            <option value="30">30 seconds</option>
-            <option value="60">60 seconds</option>
-            <option value="90">90 seconds</option>
-            <option value="120">2 minutes</option>
-          </select>
         </label>
         <div class="row"><button type="submit" class="primary">Start</button></div>
       </form>
@@ -116,8 +102,8 @@
         <p class="muted boot-slow">This is taking a while. <button type="button" class="link" onclick="location.reload()">Reload</button></p>
       </div>
       <div id="lobby-signin" hidden>
-        <p class="muted">Sign in with Google to create a game or join friends' games.</p>
-        <button type="button" id="signin" class="primary">Sign in with Google</button>
+        <p class="muted">Sign in with Google or play as a guest to create a game or join friends' games.</p>
+        <button type="button" id="signin" class="primary">Sign in or play as guest</button>
       </div>
       <div id="lobby-body" hidden>
         <button type="button" id="create-open" class="primary wide">+ Create online game</button>
@@ -148,6 +134,26 @@
         <ul id="open-games" class="games"></ul>
       </div>
       </section>
+    </div>
+  </section>
+
+  <section id="welcome" hidden>
+    <a class="home-link" href="../home/" aria-label="Home page (all sites)" title="Home page (all sites)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h5v-5.5h3V20h5V9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <div class="welcome-box">
+      <img src="icons/icon-192.png" alt="" class="welcome-icon">
+      <h1>Rummikub</h1>
+      <div id="welcome-choose">
+        <button type="button" id="welcome-google" class="primary wide">Sign in with Google</button>
+        <button type="button" id="welcome-guest" class="wide">Play as guest</button>
+        <p class="muted small">Signing in keeps your games on all your devices.</p>
+      </div>
+      <form id="welcome-guest-form" hidden>
+        <label class="field-label" for="welcome-name">Your name</label>
+        <input id="welcome-name" maxlength="14" autocomplete="nickname" required>
+        <button type="submit" class="primary wide">Play</button>
+        <p class="muted small">Your guest account is kept on this device only. Clearing this site's data loses it, along with your online games. You can sign in with Google later to keep it.</p>
+        <button type="button" id="welcome-back" class="link">← Back</button>
+      </form>
     </div>
   </section>
 

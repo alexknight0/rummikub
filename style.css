@@ -153,11 +153,13 @@ button:disabled { cursor: default; opacity: .35; }
   margin: auto;
   flex: none;
   border-radius: 6px;
+  background-color: rgba(255, 255, 255, .035);
   background-image:
-    linear-gradient(rgba(255, 255, 255, .045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, .045) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, .06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, .06) 1px, transparent 1px);
   background-size: var(--cw) var(--ch);
-  outline: 1px solid rgba(255, 255, 255, .06);
+  /* A clear edge so it's obvious where tiles can go (Alex, 2026-11-10). */
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .22), 0 0 0 6px rgba(0, 0, 0, .12);
 }
 
 /* ---------- controls ---------- */
@@ -421,16 +423,30 @@ dialog > form > .row:last-child, dialog > .row:last-child {
 #account img { width: 26px; height: 26px; border-radius: 50%; }
 .wide { width: 100%; padding: 11px; }
 #create-form, .new-form { margin-top: 8px; padding: 4px 12px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
-.field-label { margin: 10px 0 6px; }
-#setup-names { display: flex; flex-direction: column; gap: 6px; }
-#setup-names input {
+.field-label { display: block; margin: 10px 0 6px; }
+/* First screen when nobody is signed in on this device: Google or guest. */
+#welcome { position: fixed; inset: 0; z-index: 60; overflow-y: auto; display: flex; background: radial-gradient(ellipse at center, var(--felt), var(--bg)); padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+#welcome[hidden] { display: none; }
+.welcome-box { margin: auto; width: min(340px, 100% - 40px); padding: 24px 0; text-align: center; }
+.welcome-box h1 { margin: 8px 0 24px; font-size: 28px; }
+.welcome-icon { width: 84px; height: 84px; border-radius: 20px; }
+.welcome-box .wide { margin-top: 10px; font-size: 16px; }
+.welcome-box button.wide { border-radius: 10px; }
+.welcome-box button.wide:not(.primary) { background: rgba(255, 255, 255, .12); }
+#welcome .home-link { position: absolute; top: calc(10px + env(safe-area-inset-top)); left: calc(14px + env(safe-area-inset-left)); }
+#welcome-guest-form { text-align: left; }
+#welcome-name {
+  width: 100%;
   font: inherit;
+  font-size: 16px;
   color: inherit;
   background: rgba(255, 255, 255, .08);
-  border: 1px solid rgba(255, 255, 255, .15);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 10px;
+  padding: 10px 12px;
 }
+#welcome .small { margin-top: 14px; }
+#account .name-btn { color: inherit; padding: 4px 0; font: inherit; }
 /* Local and online games are separate panels with their own colour and icon. */
 .lobby-section { margin-top: 16px; padding: 12px 14px 14px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, .08); }
 .lobby-section.local { background: rgba(255, 170, 60, .07); border-left: 4px solid #e8a33d; }

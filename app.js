@@ -959,7 +959,10 @@ function applyRemote(id, g, hand, me) {
   };
   S.turnStart = { board: clone(board), rack: S.turn === me.seat ? clone(rack) : {} };
   S.history = [];
-  S.turnDeadline = !S.over && timed() ? Date.now() + S.timer * 1000 : null;
+  // The timer runs from when the turn began (turnAt, written by whoever moved),
+  // so leaving the game and coming back doesn't restart or pause it. Games
+  // from before turnAt existed fall back to the last change.
+  S.turnDeadline = !S.over && timed() ? (g.turnAt ?? g.updated ?? Date.now()) + S.timer * 1000 : null;
   busy = false;
   if (!same) buildChips();
   save();
@@ -1714,70 +1717,32 @@ function renderLocalGames() {
   if (!games.length) ul.innerHTML = '<li class="empty">No local games yet.</li>';
   $("#local-sync-note").textContent = !$("#lobby-checking").hidden ? "" : window.Cloud?.signedIn()
     ? "Synced with your Google account, so they're on your other devices too."
-    : "Sign in below to have these on your other devices too.";
+    : "Sign in with Google to have these on your other devices too.";
 }
 
 // ---------------------------------------------------------------- dialogs
 
 // The "New local game" form on the Games screen, laid out like "Create online
-// game": player count, how many are computers, their level, then names (only
-// with two or more people; one person is "You") and the turn timer (also only
-// with two or more people).
-let setupNames = []; // names typed for the people, kept while the counts change
+// game": you against 1-3 computers at one level. (Pass-and-play games with
+// several people were taken out of the form on 2026-11-10; old ones still play.)
 let setupOnLobby = false; // open the form when the Games screen next shows
 
 function openSetup(toggle = false) {
   const form = $("#setup");
   if (toggle && !form.hidden) { form.hidden = true; return; }
-  const settings = loadSettings();
-  const people = settings.players.filter((p) => p.type === "human");
-  const computers = settings.players.filter((p) => p.type !== "human");
-  setupNames = people.length > 1 ? people.map((p) => p.name) : [];
-  $("#setup-players").value = String(Math.min(4, Math.max(2, settings.players.length)));
-  updateSetup();
-  $("#setup-ai").value = String(Math.min(computers.length, settings.players.length - 1));
+  const computers = loadSettings().players.filter((p) => p.type !== "human");
+  $("#setup-ai").value = String(Math.min(3, Math.max(1, computers.length)));
   $("#setup-level").value = computers[0]?.type === "easy" ? "easy" : "hard";
-  $("#setup-timer").value = String(settings.timer);
-  updateSetup();
   form.hidden = false;
   form.scrollIntoView({ block: "nearest" });
 }
 
-function updateSetup() {
-  const total = Number($("#setup-players").value);
-  const ai = $("#setup-ai");
-  const keep = Math.min(Number(ai.value), total - 1);
-  ai.innerHTML = "";
-  for (let i = 0; i < total; i++) ai.add(new Option(String(i), String(i)));
-  ai.value = String(keep);
-  const humans = total - keep;
-  $("#setup-level-row").hidden = keep === 0;
-  $("#setup-timer-row").hidden = humans < 2; // no timer when only one person plays
-  $("#setup-names-row").hidden = humans < 2;
-  const box = $("#setup-names");
-  for (const [i, input] of [...box.querySelectorAll("input")].entries()) setupNames[i] = input.value;
-  box.innerHTML = "";
-  if (humans < 2) return;
-  for (let i = 0; i < humans; i++) {
-    const input = document.createElement("input");
-    input.maxLength = 14;
-    input.placeholder = `Player ${i + 1}`;
-    input.setAttribute("aria-label", `Player ${i + 1}'s name`);
-    input.value = setupNames[i] ?? "";
-    box.appendChild(input);
-  }
-}
-
 function readSetup() {
-  const total = Number($("#setup-players").value);
   const ai = Number($("#setup-ai").value);
   const level = $("#setup-level").value;
-  const names = [...document.querySelectorAll("#setup-names input")].map((el, i) => el.value.trim() || `Player ${i + 1}`);
-  const players = [];
-  for (let i = 0; i < total - ai; i++) players.push({ name: total - ai > 1 ? names[i] : "You", type: "human" });
+  const players = [{ name: "You", type: "human" }];
   for (let i = 0; i < ai; i++) players.push({ name: ai > 1 ? `Computer ${i + 1}` : "Computer", type: level });
-  // Kept even with one person (it's ignored then) so it's remembered for next time.
-  return { players, timer: Number($("#setup-timer").value) };
+  return { players, timer: 0 };
 }
 
 function showResults() {
@@ -1837,8 +1802,6 @@ function init() {
   for (const r of document.querySelectorAll("input[name=pref-pickup]")) r.onchange = () => { setPref("pickup", r.value); setSelection(null); };
   for (const r of document.querySelectorAll("input[name=pref-move]")) r.onchange = () => { setPref("move", r.value); setSelection(null); showPickupSetting(); };
   $("#new-local").onclick = () => openSetup(true);
-  $("#setup-players").onchange = updateSetup;
-  $("#setup-ai").onchange = updateSetup;
   $("#setup").onsubmit = (e) => {
     e.preventDefault();
     $("#setup").hidden = true;
@@ -1859,8 +1822,56 @@ function init() {
   };
   setInterval(tick, 250);
 
+  $("#signin").onclick = () => showWelcome(true);
+  $("#welcome-google").onclick = async () => {
+    if (await whenOnline()) window.Online.signIn();
+    else toast("Couldn't reach Google. Check your connection.");
+  };
+  $("#welcome-guest").onclick = () => {
+    $("#welcome-choose").hidden = true;
+    $("#welcome-guest-form").hidden = false;
+    $("#welcome-name").value = localStorage.getItem(GUEST_NAME_KEY) || "";
+    $("#welcome-name").focus();
+  };
+  $("#welcome-back").onclick = () => showWelcome(true);
+  $("#welcome-guest-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("#welcome-name").value.trim().slice(0, 14);
+    if (!name) return;
+    localStorage.setItem(GUEST_NAME_KEY, name);
+    const btn = $("#welcome-guest-form button[type=submit]");
+    btn.disabled = true;
+    const ok = (await whenOnline()) && (await window.Online.signInGuest(name));
+    btn.disabled = false;
+    showWelcome(false);
+    if (!ok) {
+      toast("Couldn't connect, so online games are off for now. You can still play the computer.");
+      if (location.hash.startsWith("#online=")) goLobby({ replace: true });
+    }
+  };
+  // No sign-in saved on this device: start on the welcome screen instead of
+  // waiting for Firebase to say so.
+  if (!hasSavedSignIn()) showWelcome(true);
+
   migrateOldSave();
   route();
+}
+
+// The welcome screen (Sign in with Google / Play as guest). online.js shows it
+// whenever nobody is signed in, and hides it once someone is.
+const GUEST_NAME_KEY = "rummikub:guestName";
+const hasSavedSignIn = () => Object.keys(localStorage).some((k) => k.startsWith("firebase:authUser:AIzaSyBiB5Jk4IxiYqwvvsfk5A6-n_ia3tBpRVg:"));
+
+// online.js loads after this file (and from the network); wait up to 8 s for it.
+async function whenOnline() {
+  for (let i = 0; i < 80 && !window.Online?.signInGuest; i++) await new Promise((r) => setTimeout(r, 100));
+  return !!window.Online?.signInGuest;
+}
+
+function showWelcome(show) {
+  $("#welcome").hidden = !show;
+  $("#welcome-choose").hidden = false;
+  $("#welcome-guest-form").hidden = true;
 }
 
 // ---------------------------------------------------------------- version check

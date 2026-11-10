@@ -1,4 +1,4 @@
-// Online play: Google sign-in, a lobby of open games, and games synced through
+// Online play: Google or guest sign-in, a lobby of open games, and games synced through
 // Firestore (project rummikub-10501b; access rules in firestore.rules).
 //
 //   games/{id}: status "open" | "playing" | "over", host (uid), hostName,
@@ -6,7 +6,8 @@
 //     playerUids [uid], and once playing: board {tileId: row * 100 + col},
 //     turn, moveNo, counts [tiles per seat], melded [bool], lastPlaced [ids],
 //     lastMove {seat, kind: "play" | "draw" | "pass" | "skip"}, passes,
-//     poolCount, over {winner: seat | null}
+//     poolCount, over {winner: seat | null}, turnAt (ms, when the current
+//     turn began; the turn timer counts from it)
 //   games/{id}/hands/{uid or "ai<seat>"}: {tiles: [ids], moveNo}. A person's
 //     hand can only be read by them until the game ends.
 //   games/{id}/secret/pool: {pool: [ids]} (drawn from the end), readable by
@@ -17,7 +18,14 @@
 // read the pool order (or, for the host, the opening hands) with developer
 // tools; that's accepted for games among friends.
 //
-// It also syncs the signed-in player's games on this device (against the
+// Guests use Firebase anonymous sign-in: a uid kept in this browser's
+// localStorage, with the name they typed as the profile's displayName. The
+// rules only need request.auth, so guests play online like anyone else.
+// "Sign in" on a guest links a Google account to the same uid, so their games
+// carry over (unless that Google account was already used here; then they
+// switch to it). Guests' local games aren't synced.
+//
+// It also syncs the Google-signed-in player's games on this device (against the
 // computer / pass and play) between their devices:
 //   users/{uid}/games/{id}: {state: JSON of the game (as app.js stores it,
 //     without the undo history), updated (ms), deleted (bool)}
@@ -25,14 +33,14 @@
 // other devices remove it too.
 //
 // Uses globals from app.js: S, Store, GAME_PREFIX, applyRemote, onlineResults,
-// resumeLocal, route, openGame, goLobby, pageOpen, renderLocalGames, row,
+// resumeLocal, route, openGame, goLobby, pageOpen, renderLocalGames, showWelcome, row,
 // toast, requestAIMove, aiMoveIsLegal, layoutSets, shuffle, keys, makeDeck, pace.
 //
 // A player who resigns keeps their seat with seats[i].resigned = true; turns
 // skip them, and the game ends when one player (or no person) is left.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
-import { initializeAuth, browserLocalPersistence, browserPopupRedirectResolver, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
+import { initializeAuth, browserLocalPersistence, browserPopupRedirectResolver, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, updateProfile, linkWithPopup, signInWithCredential } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, addDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -62,22 +70,80 @@ let cur = null; // {id, g, hand, seat, unsubs}
 let aiTimer = null;
 let resultsFor = null;
 let pendingGame = null; // online game in the URL, waiting for sign-in to load
+const joinedAt = new Map(); // game id -> when this device joined it (ms)
+const JOIN_GRACE_MS = 10_000;
 
 const gameRef = (id) => doc(db, "games", id);
 const handRef = (id, h) => doc(db, "games", id, "hands", h);
 const poolRef = (id) => doc(db, "games", id, "secret", "pool");
-const firstName = (u) => (u.displayName || u.email || "Player").split(/[\s@]/)[0].slice(0, 14);
+// A guest's name is used whole (they typed it); a Google name is cut to the first name.
+const firstName = (u) => (u.isAnonymous ? (u.displayName || "Guest").slice(0, 14) : (u.displayName || u.email || "Player").split(/[\s@]/)[0].slice(0, 14));
+const syncing = () => !!user && !user.isAnonymous; // local games sync only to a Google account
 const meSeat = () => ({ uid: user.uid, name: firstName(user), photo: user.photoURL || null, type: "human" });
 const gameScreenHidden = () => $("#game-screen").hidden;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- sign-in
 
+const popupClosed = (e) => e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request";
+
 async function signIn() {
   try {
     await signInWithPopup(auth, new GoogleAuthProvider());
   } catch (e) {
-    if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") toast(`Sign-in failed: ${e.code || e.message}`);
+    if (!popupClosed(e)) toast(`Sign-in failed: ${e.code || e.message}`);
+  }
+}
+
+// Returns true once signed in as a guest called `name`.
+async function signInGuest(name) {
+  try {
+    const { user: u } = await signInAnonymously(auth);
+    await updateProfile(u, { displayName: name });
+    user = auth.currentUser;
+    renderAccount();
+    if (pageOpen()) renderLobby();
+    return true;
+  } catch (e) {
+    console.warn(e);
+    return false;
+  }
+}
+
+async function renameGuest() {
+  const name = prompt("Your name (for new games):", firstName(user))?.trim().slice(0, 14);
+  if (!name) return;
+  try {
+    await updateProfile(user, { displayName: name });
+    localStorage.setItem("rummikub:guestName", name);
+    renderAccount();
+  } catch (e) {
+    console.warn(e);
+    toast("Couldn't change your name. Check your connection.");
+  }
+}
+
+// A guest signs in with Google: the Google account joins the guest's uid, so
+// their online and local games stay. If that Google account has been used
+// for Rummikub before it can't join; offer to switch to it instead.
+async function linkGoogle() {
+  try {
+    const res = await linkWithPopup(user, new GoogleAuthProvider());
+    const g = res.user.providerData.find((p) => p.providerId === "google.com");
+    await updateProfile(res.user, { displayName: g?.displayName || res.user.displayName, photoURL: g?.photoURL || null });
+    user = auth.currentUser;
+    renderAccount();
+    startSync();
+    renderLocalGames();
+    toast("Signed in. Your games are kept.");
+  } catch (e) {
+    if (popupClosed(e)) return;
+    const cred = GoogleAuthProvider.credentialFromError(e);
+    if (e.code === "auth/credential-already-in-use" && cred) {
+      if (!confirm("That Google account already has Rummikub games. Switch to it? Your guest games stay with the guest account, which you won't be able to get back to.")) return;
+      leaveView();
+      await signInWithCredential(auth, cred).catch((e2) => toast(`Sign-in failed: ${e2.code || e2.message}`));
+    } else toast(`Sign-in failed: ${e.code || e.message}`);
   }
 }
 
@@ -94,16 +160,27 @@ function renderAccount() {
     img.src = user.photoURL;
     box.appendChild(img);
   }
-  const name = document.createElement("span");
+  const name = document.createElement(user.isAnonymous ? "button" : "span");
   name.textContent = firstName(user);
   const out = document.createElement("button");
   out.type = "button";
   out.className = "link";
-  out.textContent = "Sign out";
-  out.onclick = async () => {
-    leaveView();
-    await signOut(auth);
-  };
+  if (user.isAnonymous) {
+    // Guests can't sign out (the account would be lost); they can rename or sign in.
+    name.type = "button";
+    name.className = "name-btn";
+    name.title = "Change your name";
+    name.onclick = renameGuest;
+    out.textContent = "Sign in";
+    out.title = "Sign in with Google to keep your games on all your devices";
+    out.onclick = linkGoogle;
+  } else {
+    out.textContent = "Sign out";
+    out.onclick = async () => {
+      leaveView();
+      await signOut(auth);
+    };
+  }
   box.append(name, out);
 }
 
@@ -225,6 +302,7 @@ async function joinGame(id) {
       seats[i] = meSeat();
       tx.update(gameRef(id), { seats, playerUids: [...g.playerUids, user.uid], updated: Date.now() });
     });
+    joinedAt.set(id, Date.now());
     openGame("online", id);
   } catch (e) {
     console.warn(e);
@@ -272,7 +350,7 @@ async function startGame() {
       tx.update(gameRef(id), {
         status: "playing", seats, board: {}, turn: Math.floor(Math.random() * seats.length), moveNo: 1,
         counts: seats.map(() => 14), melded: seats.map(() => false), lastPlaced: [], lastMove: null,
-        passes: 0, poolCount: pool.length, over: null, updated: Date.now(),
+        passes: 0, poolCount: pool.length, over: null, updated: Date.now(), turnAt: Date.now(),
       });
     });
   } catch (e) {
@@ -321,7 +399,7 @@ async function resign(g) {
         // Last one in wins; if only computers are left, the one with the fewest tiles.
         const winner = left.reduce((a, b) => (d.counts[b] < d.counts[a] ? b : a));
         Object.assign(upd, { status: "over", over: { winner } });
-      } else if (d.turn === seat) upd.turn = nextSeat(seats, seat);
+      } else if (d.turn === seat) Object.assign(upd, { turn: nextSeat(seats, seat), turnAt: Date.now() });
       tx.update(gameRef(g.id), upd);
     });
     toast("You resigned.");
@@ -357,6 +435,10 @@ function followGame(id) {
     cur.g = g;
     cur.seat = g.seats.findIndex((s) => s.uid === user.uid);
     if (cur.seat < 0) {
+      // Just joined: the first copy can be the one the lobby had cached from
+      // before the join (transactions don't update the cache), so wait for
+      // the server's copy instead of saying you're not in it.
+      if (snap.metadata?.fromCache || (joinedAt.get(id) ?? 0) > Date.now() - JOIN_GRACE_MS) return;
       toast("You're not in that game.");
       return goLobby({ replace: true });
     }
@@ -394,14 +476,14 @@ let cloudUnsub = null;
 
 // Called by app.js after every change to a game; uploads it shortly after.
 function queue(id) {
-  if (!user) return;
+  if (!syncing()) return;
   clearTimeout(pushTimers.get(id));
   pushTimers.set(id, setTimeout(() => push(id), PUSH_DELAY_MS));
 }
 
 async function push(id) {
   pushTimers.delete(id);
-  if (!user) return;
+  if (!syncing()) return;
   const g = Store.get(id);
   if (!g || (remoteSeen.get(id) ?? -1) >= g.updated) return;
   try {
@@ -420,7 +502,7 @@ function flushPushes() {
 }
 
 async function removeRemote(id) {
-  if (!user) return;
+  if (!syncing()) return;
   try {
     await setDoc(cloudRef(id), { state: "", updated: Date.now(), deleted: true });
   } catch (e) {
@@ -516,7 +598,7 @@ function nextState(g, seat, kind, { board, count, placed, poolCount } = {}) {
   const passes = kind === "pass" || kind === "skip" ? g.passes + 1 : 0;
   const upd = {
     counts, melded, passes, lastMove: { seat, kind }, lastPlaced: placed || [],
-    moveNo: g.moveNo + 1, turn: nextSeat(g.seats, g.turn), updated: Date.now(),
+    moveNo: g.moveNo + 1, turn: nextSeat(g.seats, g.turn), updated: Date.now(), turnAt: Date.now(),
   };
   if (board) upd.board = board;
   if (poolCount !== undefined) upd.poolCount = poolCount;
@@ -614,7 +696,6 @@ async function runAITurn(id, moveNo) {
 
 // ---------------------------------------------------------------- wiring
 
-$("#signin").onclick = signIn;
 $("#create-open").onclick = () => {
   $("#create-form").hidden = !$("#create-form").hidden;
   updateCreateForm();
@@ -632,7 +713,8 @@ $("#room-lobby").onclick = () => goLobby();
 $("#room").addEventListener("cancel", (e) => e.preventDefault());
 
 window.Online = { pageOpened, pageClosed, leaveView, followGame, play, draw, skip, resignCurrent: () => cur?.g && resign({ id: cur.id, ...cur.g }) };
-window.Cloud = { queue, remove: removeRemote, signedIn: () => !!user };
+window.Cloud = { queue, remove: removeRemote, signedIn: syncing };
+Object.assign(window.Online, { signIn, signInGuest });
 
 // app.js routed before this module loaded: pick up an online game in the URL.
 {
@@ -640,21 +722,17 @@ window.Cloud = { queue, remove: removeRemote, signedIn: () => !!user };
   if (m && !gameScreenHidden()) pendingGame = m[1];
 }
 
-let first = true;
 onAuthStateChanged(auth, (u) => {
   user = u;
   $("#lobby-checking").hidden = true;
   renderAccount();
-  if (u) startSync();
+  if (u && !u.isAnonymous) startSync();
   else stopSync();
-  // An online game in the URL (e.g. after a reload) can load now.
+  // Nobody signed in on this device: ask (Google or guest). An online game in
+  // the URL waits behind it and loads once they've chosen.
+  showWelcome(!u);
   if (u && pendingGame) followGame(pendingGame);
-  else if (!u && (pendingGame || cur)) {
-    pendingGame = null;
-    if (first) toast("Sign in to open online games.");
-    goLobby({ replace: true });
-  }
-  first = false;
+  else if (!u && cur) goLobby({ replace: true });
   if (pageOpen()) {
     subscribeLobby();
     renderLocalGames();
