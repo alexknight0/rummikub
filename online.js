@@ -77,7 +77,8 @@ const gameRef = (id) => doc(db, "games", id);
 const handRef = (id, h) => doc(db, "games", id, "hands", h);
 const poolRef = (id) => doc(db, "games", id, "secret", "pool");
 // A guest's name is used whole (they typed it); a Google name is cut to the first name.
-const firstName = (u) => (u.isAnonymous ? (u.displayName || "Guest").slice(0, 14) : (u.displayName || u.email || "Player").split(/[\s@]/)[0].slice(0, 14));
+// (A guest's profile name can lag behind the sign-in, so fall back to the name saved on this device.)
+const firstName = (u) => (u.isAnonymous ? (u.displayName || localStorage.getItem("rummikub:guestName") || "Guest").slice(0, 14) : (u.displayName || u.email || "Player").split(/[\s@]/)[0].slice(0, 14));
 const syncing = () => !!user && !user.isAnonymous; // local games sync only to a Google account
 const meSeat = () => ({ uid: user.uid, name: firstName(user), photo: user.photoURL || null, type: "human" });
 const gameScreenHidden = () => $("#game-screen").hidden;
@@ -726,6 +727,9 @@ onAuthStateChanged(auth, (u) => {
   user = u;
   $("#lobby-checking").hidden = true;
   renderAccount();
+  // A guest whose name didn't reach their profile (e.g. the page closed too soon).
+  const saved = localStorage.getItem("rummikub:guestName");
+  if (u?.isAnonymous && !u.displayName && saved) updateProfile(u, { displayName: saved }).catch((e) => console.warn(e));
   if (u && !u.isAnonymous) startSync();
   else stopSync();
   // Nobody signed in on this device: ask (Google or guest). An online game in
