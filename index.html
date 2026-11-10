@@ -166,8 +166,20 @@
         <span><b>Fast mode</b><small>The computer plays straight away, with no pauses before or after its turn. Its tiles still fly onto the table one by one.</small></span>
       </label>
 
-      <h3>Moving a whole set</h3>
+      <h3>Moving tiles</h3>
       <div class="choices">
+        <label class="toggle">
+          <input type="radio" name="pref-move" value="drag">
+          <span><b>Drag</b><small>Drag tiles where you want them.</small></span>
+        </label>
+        <label class="toggle">
+          <input type="radio" name="pref-move" value="tap">
+          <span><b>Tap</b><small>Tap a tile to pick it up (it's outlined), then tap an empty space on the table or in your rack to put it there. Tap it again to pick up its whole set too, and once more to put it down. Dragging still works.</small></span>
+        </label>
+      </div>
+
+      <h3 class="pickup-setting">Moving a whole set</h3>
+      <div class="choices pickup-setting">
         <label class="toggle">
           <input type="radio" name="pref-pickup" value="hold">
           <span><b>Hold</b><small>Press and hold a tile, then drag to move it with the set it's in.</small></span>

@@ -37,7 +37,7 @@ const PACE = {
   normal: { start: 100, think: 250, after: 100, stagger: 275 },
   fast: { start: 0, think: 0, after: 0, stagger: 275 },
 };
-let prefs = { fast: false, pickup: "hold" }; // pickup: "hold" or "doubletap"
+let prefs = { fast: false, pickup: "hold", move: "drag" }; // pickup: "hold" or "doubletap"; move: "drag" or "tap"
 try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem(PREFS_KEY)) }; } catch { /* defaults */ }
 const pace = () => PACE[prefs.fast ? "fast" : "normal"];
 function setPref(k, v) {
@@ -67,6 +67,11 @@ let worker = null;
 let aiReq = 0;
 const aiPending = new Map(); // worker request id -> resolve
 const L = { cw: 40, ch: 52, rw: 40, rh: 52, rackCols: 10, rackRows: 2, cols: 14, rows: 8 };
+// Smallest table grid, the same on every device (see computeLayout). Sized so
+// tiles stay large on a portrait phone (width-limited) and a landscape phone
+// (height-limited).
+const BOARD_COLS = 12;
+const BOARD_ROWS = 6;
 const landscapePhone = matchMedia("(orientation: landscape) and (max-height: 500px)");
 const els = new Map(); // tile id -> element
 const ghosts = new Map(); // tile id -> flying copy currently animating
@@ -1050,9 +1055,11 @@ function computeLayout() {
   Object.assign(rackEl.style, { width: L.rackCols * L.rw + "px", height: L.rackRows * L.rh + "px" });
   rackEl.style.setProperty("--ch", L.rh + "px");
 
-  // Table tiles are rack-sized and the grid fills the table area, with a free
-  // row and column past the furthest tile so any set can be extended. Tiles
-  // only shrink when that doesn't fit.
+  // Table tiles are rack-sized where they fit. The grid is the same size on
+  // every device (BOARD_COLS x BOARD_ROWS) so a table laid out on a laptop
+  // also fits a phone, portrait or landscape. It only grows past that to keep
+  // a free row and column past the furthest tile (so any set can be
+  // extended), and tiles shrink when the bigger grid doesn't fit.
   const bw = boardWrap.clientWidth - 8;
   const bh = boardWrap.clientHeight - 8;
   let maxR = -1;
@@ -1061,13 +1068,10 @@ function computeLayout() {
     maxR = Math.max(maxR, S.board[id][0]);
     maxC = Math.max(maxC, S.board[id][1]);
   }
-  const target = Math.min(L.rw, Math.floor(bw / 10)); // at least 10 columns; longer runs make the table shrink to fit
-  const needCols = Math.max(Math.floor(bw / target), maxC + 2);
-  const needRows = Math.max(Math.floor(bh / (target * 1.3)), maxR + 2);
-  L.cw = Math.max(18, Math.floor(Math.min(target, bw / needCols, bh / needRows / 1.3)));
+  L.cols = Math.max(BOARD_COLS, maxC + 2);
+  L.rows = Math.max(BOARD_ROWS, maxR + 2);
+  L.cw = Math.max(18, Math.floor(Math.min(L.rw, bw / L.cols, bh / L.rows / 1.3)));
   L.ch = Math.round(L.cw * 1.3);
-  L.cols = Math.max(needCols, Math.floor(bw / L.cw));
-  L.rows = Math.max(needRows, Math.floor(bh / L.ch));
   Object.assign(boardEl.style, { width: L.cols * L.cw + "px", height: L.rows * L.ch + "px" });
   boardEl.style.setProperty("--cw", L.cw + "px");
   boardEl.style.setProperty("--ch", L.ch + "px");
@@ -1407,11 +1411,45 @@ function setSelection(ids) {
   for (const [id, el] of els) el.classList.toggle("selected", !!ids && ids.includes(id));
 }
 
+// "tap" setting (Moving tiles → Tap): tapping a tile picks it up (selects it);
+// tapping it again adds the rest of its set (groupOf), and once more puts it
+// down. Tapping an empty table cell or rack slot moves the selection there,
+// first tile on the tapped spot. Dragging still works as usual. In this mode
+// "Moving a whole set" is always Hold (a double-tap would clash).
+const tapMode = () => prefs.move === "tap";
+const pickupMode = () => (tapMode() ? "hold" : prefs.pickup);
+
+function showPickupSetting() {
+  for (const el of document.querySelectorAll(".pickup-setting")) el.hidden = tapMode();
+}
+
+function tapTile(id) {
+  if (!selection?.includes(id)) return setSelection([id]);
+  const group = groupOf(id);
+  if (selection.length === 1 && group.length > 1 && group.every(canDrag)) {
+    navigator.vibrate?.(15);
+    return setSelection(group);
+  }
+  setSelection(null);
+}
+
+// A tap on the table or rack (not on a tile) while tiles are picked up.
+function onTapPlace(e) {
+  if (!tapMode() || !selection || !S || e.target.closest(".tile, button, dialog")) return;
+  const ids = selection;
+  const dest = dropTarget(e.clientX, e.clientY);
+  setSelection(null);
+  if (!dest || !ids.every(canDrag)) return render();
+  ids.length > 1 ? tryMoveSet(ids, 0, dest) : tryMove(ids[0], dest);
+  render();
+}
+
 function onPointerDown(e) {
   if (drag || e.button > 0) return;
   const el = e.target.closest(".tile");
   if (!el || el.parentNode === dragLayer) {
-    if (selection && !e.target.closest("button")) setSelection(null);
+    // In tap mode the click that follows places the selection (onTapPlace).
+    if (selection && !tapMode() && !e.target.closest("button")) setSelection(null);
     return;
   }
   const id = Number(el.dataset.id);
@@ -1425,7 +1463,12 @@ function onPointerDown(e) {
   drag = { id, ids: [id], idx: 0, pointerId: e.pointerId, slop: dragSlop(e), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, active: false };
   const group = groupOf(id);
   const groupOk = group.length > 1 && group.every(canDrag);
-  if (prefs.pickup === "doubletap") {
+  if (tapMode() && selection?.includes(id) && selection.every(canDrag)) {
+    // Dragging a picked-up tile carries everything picked up.
+    drag.ids = selection;
+    drag.idx = selection.indexOf(id);
+  }
+  if (pickupMode() === "doubletap") {
     if (selection?.includes(id) && selection.every(canDrag)) {
       drag.ids = selection;
       drag.idx = selection.indexOf(id);
@@ -1440,7 +1483,7 @@ function onPointerDown(e) {
     return;
   }
   // Holding still picks up the whole set (on the table or in the rack).
-  if (groupOk) {
+  if (groupOk && drag.ids.length === 1) {
     const d = drag;
     d.timer = setTimeout(() => {
       if (drag !== d || d.active) return;
@@ -1504,6 +1547,7 @@ function finishDrag(drop) {
   clearTimeout(d.timer);
   hint.remove();
   if (!d.active) {
+    if (drop && tapMode()) return tapTile(d.id);
     // A tap: remember it so a second tap on the same tile selects its set.
     if (drop && !d.selecting) lastTap = { id: d.id, t: performance.now() };
     return;
@@ -1557,6 +1601,7 @@ function goLobby({ replace = false } = {}) {
   if (S && location.hash) lastGameHash = location.hash;
   for (const d of ["#results", "#room", "#setup"]) if ($(d).open) $(d).close();
   cancelDrag();
+  setSelection(null);
   if (S && !S.online) save();
   window.Online?.leaveView();
   gameToken++;
@@ -1756,6 +1801,7 @@ function showResults() {
 function init() {
   startWorker();
   document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("click", onTapPlace);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
@@ -1777,12 +1823,15 @@ function init() {
   $("#settings-btn").onclick = () => {
     $("#pref-fast").checked = prefs.fast;
     $(`input[name=pref-pickup][value=${prefs.pickup}]`).checked = true;
+    $(`input[name=pref-move][value=${prefs.move}]`).checked = true;
+    showPickupSetting();
     $("#settings-page").hidden = false;
   };
   window.addEventListener("popstate", route);
   $("#settings-back").onclick = () => { $("#settings-page").hidden = true; };
   $("#pref-fast").onchange = (e) => setPref("fast", e.target.checked);
   for (const r of document.querySelectorAll("input[name=pref-pickup]")) r.onchange = () => { setPref("pickup", r.value); setSelection(null); };
+  for (const r of document.querySelectorAll("input[name=pref-move]")) r.onchange = () => { setPref("move", r.value); setSelection(null); showPickupSetting(); };
   $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
   $("#setup-cancel").onclick = () => $("#setup").close();
   $("#setup-form").onsubmit = () => newGame(readSetup());
