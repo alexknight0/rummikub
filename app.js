@@ -1239,7 +1239,11 @@ function renderHUD() {
     chip.classList.toggle("active", i === S.turn && !S.over);
     const sub = chip.querySelector(".chip-sub");
     const n = rackCount(p);
-    sub.textContent = p.resigned ? "Resigned" : `${n} tile${n === 1 ? "" : "s"}${p.type === "human" ? "" : " · AI"}`;
+    // Against the computer the tile counts just confuse (Alex, 2026-11-10): show the computer's level instead.
+    const vsComputer = !S.online && S.players.filter((q) => q.type === "human").length === 1;
+    if (p.resigned) sub.textContent = "Resigned";
+    else if (vsComputer) sub.textContent = p.type === "human" ? "" : p.type === "easy" ? "Easy" : "Hard";
+    else sub.textContent = `${n} tile${n === 1 ? "" : "s"}${p.type === "human" ? "" : " · AI"}`;
     chip.classList.toggle("out", !!p.resigned);
     sub.classList.toggle("dots", thinking === i || (!!S.online && i === S.turn && !S.over && p.type !== "human"));
   });
@@ -1693,20 +1697,17 @@ function renderLocalGames() {
   const ul = $("#local-games");
   ul.innerHTML = "";
   pruneGames();
-  const games = Store.all().sort((a, b) => !!a.over - !!b.over || b.updated - a.updated);
+  // Finished games aren't listed (Alex, 2026-11-10); they're pruned after a few days.
+  const games = Store.all().filter((g) => !g.over).sort((a, b) => b.updated - a.updated);
   for (const g of games) {
     const names = g.players.map((p) => p.name).join(" vs ");
-    let sub;
-    if (g.over) sub = `Finished · ${g.players[g.over.winner]?.name ?? "?"} won · ${ago(g.updated)}`;
-    else {
-      const who = g.players[g.turn];
-      const turn = who.type !== "human" ? `${who.name} to play` : who.name === "You" ? "Your turn" : `${who.name}'s turn`;
-      const tiles = g.players.map((p) => keys(p.rack).length).join(" / ");
-      sub = `${turn} · ${tiles} tiles · ${ago(g.updated)}`;
-    }
-    const buttons = g.over
-      ? [["Remove", () => { Store.remove(g.id); window.Cloud?.remove(g.id); renderLocalGames(); }], ["View", () => openGame("local", g.id)]]
-      : [["Resign", () => {
+    const who = g.players[g.turn];
+    const turn = who.type !== "human" ? `${who.name} to play` : who.name === "You" ? "Your turn" : `${who.name}'s turn`;
+    // Tile counts only for old pass-and-play games; against the computer they just confuse.
+    const people = g.players.filter((p) => p.type === "human").length;
+    const tiles = people > 1 ? ` · ${g.players.map((p) => keys(p.rack).length).join(" / ")} tiles` : "";
+    const sub = `${turn}${tiles} · ${ago(g.updated)}`;
+    const buttons = [["Resign", () => {
         // Ask first, so Cancel leaves you on the Games screen.
         if (viewerIndex(g) < 0 || !confirm(resignQuestion(g))) return;
         openGame("local", g.id);

@@ -232,7 +232,7 @@ function renderLobby() {
   mineBox.innerHTML = "";
   openBox.innerHTML = "";
   const mine = lobbyData.mine
-    .filter((g) => g.status !== "over" || now - g.updated < LOBBY_MAX_AGE_MS)
+    .filter((g) => g.status !== "over") // finished games aren't listed (Alex, 2026-11-10)
     .sort((a, b) => b.updated - a.updated);
   for (const g of mine) {
     const meIn = g.seats.find((s) => s.uid === user.uid);
