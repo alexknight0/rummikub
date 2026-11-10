@@ -371,6 +371,7 @@ dialog > form > .row:last-child, dialog > .row:last-child {
   min-width: 0;
 }
 .prow input { flex: 1; }
+.prow input:disabled { opacity: .55; }
 .prow .rm { width: 34px; font-size: 18px; color: var(--muted); }
 
 details { margin-top: 8px; color: var(--muted); font-size: 14px; }

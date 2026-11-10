@@ -210,11 +210,11 @@ function newGame(settings) {
 }
 
 // Whose rack is shown at the bottom.
-function viewerIndex() {
-  if (!S) return -1;
-  if (S.online) return S.online.seat;
-  if (cur().type === "human") return S.turn;
-  return S.viewer ?? -1;
+function viewerIndex(st = S) {
+  if (!st) return -1;
+  if (st.online) return st.online.seat;
+  if (st.players[st.turn].type === "human") return st.turn;
+  return st.viewer ?? -1;
 }
 
 function isHumanTurn() {
@@ -643,17 +643,24 @@ function nextLocalSeat(from) {
   return i;
 }
 
+// The question asked before resigning a local game `st` (S or a saved game).
+function resignQuestion(st) {
+  const pi = viewerIndex(st);
+  const left = st.players.map((q, i) => i).filter((i) => i !== pi && !st.players[i].resigned);
+  return left.length > 1 && left.some((i) => st.players[i].type === "human")
+    ? `Resign, ${st.players[pi].name}? You'll be out and the others carry on.`
+    : `Resign this game? ${left.length === 1 ? st.players[left[0]].name + " wins." : "The computer with the fewest tiles wins."}`;
+}
+
 // Resign on this device: the player whose rack is showing is out. The game
 // ends if nobody (or only computers) would be left to play.
-function resignLocal() {
+// `asked`: the Games screen already confirmed before opening the game.
+function resignLocal({ asked = false } = {}) {
   const pi = viewerIndex();
   if (!S || S.online || S.over || pi < 0) return;
   const p = S.players[pi];
   const left = S.players.map((q, i) => i).filter((i) => i !== pi && !S.players[i].resigned);
-  const msg = left.length > 1 && left.some((i) => S.players[i].type === "human")
-    ? `Resign, ${p.name}? You'll be out and the others carry on.`
-    : `Resign this game? ${left.length === 1 ? S.players[left[0]].name + " wins." : "The computer with the fewest tiles wins."}`;
-  if (!confirm(msg)) return;
+  if (!asked && !confirm(resignQuestion(S))) return;
   cancelDrag();
   if (S.turn === pi) revertTurn();
   p.resigned = true;
@@ -1647,7 +1654,12 @@ function renderLocalGames() {
     }
     const buttons = g.over
       ? [["Remove", () => { Store.remove(g.id); window.Cloud?.remove(g.id); renderLocalGames(); }], ["View", () => openGame("local", g.id)]]
-      : [["Resign", () => { openGame("local", g.id); resignLocal(); }, "danger"], ["Open", () => openGame("local", g.id), "primary"]];
+      : [["Resign", () => {
+        // Ask first, so Cancel leaves you on the Games screen.
+        if (viewerIndex(g) < 0 || !confirm(resignQuestion(g))) return;
+        openGame("local", g.id);
+        resignLocal({ asked: true });
+      }, "danger"], ["Open", () => openGame("local", g.id), "primary"]];
     ul.appendChild(row(names, sub, buttons, `#local=${g.id}` === lastGameHash ? "current" : ""));
   }
   if (!games.length) ul.innerHTML = '<li class="empty">No games yet. Start one against the computer, or pass the phone around.</li>';
@@ -1689,6 +1701,24 @@ function updateSetupButtons() {
   $("#setup-timer-row").hidden = humans < 2;
   $("#add-player").hidden = n >= 4;
   for (const b of document.querySelectorAll("#setup-players .rm")) b.style.visibility = n > 2 ? "" : "hidden";
+  // Names are only editable with two or more people; otherwise it's "You"
+  // against "Computer" (numbered when there are several computers).
+  const rows = [...document.querySelectorAll("#setup-players .prow")];
+  const computers = rows.filter((r) => r.querySelector("select").value !== "human");
+  for (const r of rows) {
+    const input = r.querySelector("input");
+    const wasLocked = input.disabled;
+    input.disabled = humans < 2;
+    if (humans >= 2) {
+      // Just unlocked: a person still called "Computer" gets a proper name.
+      if (wasLocked && r.querySelector("select").value === "human" && /^Computer( \d)?$/.test(input.value)) {
+        input.value = `Player ${rows.indexOf(r) + 1}`;
+      }
+      continue;
+    }
+    const c = computers.indexOf(r);
+    input.value = c < 0 ? "You" : computers.length > 1 ? `Computer ${c + 1}` : "Computer";
+  }
 }
 
 function readSetup() {
