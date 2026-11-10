@@ -360,8 +360,7 @@ dialog > form > .row:last-child, dialog > .row:last-child {
 .link { color: var(--accent); padding: 6px 0; }
 .field { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 10px 0; }
 
-.prow { display: flex; gap: 6px; margin-bottom: 8px; }
-.prow input, .prow select, .field select {
+.field select {
   font: inherit;
   color: inherit;
   background: rgba(255, 255, 255, .08);
@@ -370,13 +369,6 @@ dialog > form > .row:last-child, dialog > .row:last-child {
   padding: 7px 8px;
   min-width: 0;
 }
-.prow input { flex: 1; }
-.prow input:disabled { opacity: .55; }
-.prow .rm { width: 34px; font-size: 18px; color: var(--muted); }
-
-details { margin-top: 8px; color: var(--muted); font-size: 14px; }
-details summary { cursor: pointer; color: var(--text); }
-details ul { padding-left: 18px; margin: 8px 0 0; }
 
 #results-table { width: 100%; border-collapse: collapse; }
 #results-table td { padding: 6px 4px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
@@ -428,7 +420,26 @@ details ul { padding-left: 18px; margin: 8px 0 0; }
 @media (max-width: 420px) { #account span { display: none; } }
 #account img { width: 26px; height: 26px; border-radius: 50%; }
 .wide { width: 100%; padding: 11px; }
-#create-form { margin-top: 8px; padding: 4px 12px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
+#create-form, .new-form { margin-top: 8px; padding: 4px 12px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
+.field-label { margin: 10px 0 6px; }
+#setup-names { display: flex; flex-direction: column; gap: 6px; }
+#setup-names input {
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+/* Local and online games are separate panels with their own colour and icon. */
+.lobby-section { margin-top: 16px; padding: 12px 14px 14px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, .08); }
+.lobby-section.local { background: rgba(255, 170, 60, .07); border-left: 4px solid #e8a33d; }
+.lobby-section.online { background: rgba(80, 160, 255, .07); border-left: 4px solid #4c9bf0; }
+.lobby-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; }
+.lobby-title svg { width: 22px; height: 22px; flex: none; }
+.local .lobby-title svg { color: #f0b052; }
+.online .lobby-title svg { color: #6aaef5; }
+.lobby-sub { margin: 2px 0 12px; color: var(--muted); font-size: 14px; }
 .games { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .game-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(255, 255, 255, .06); }
 .game-row.current { box-shadow: 0 0 0 1.5px var(--accent) inset; }

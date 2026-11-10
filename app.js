@@ -1592,6 +1592,10 @@ function showScreen(name, hash, { replace = false } = {}) {
   gameScreen.hidden = lobby;
   if (lobby) {
     renderLocalGames();
+    // The new-game form starts closed, unless "New game" in a results box asked for it.
+    $("#setup").hidden = true;
+    if (setupOnLobby) openSetup();
+    setupOnLobby = false;
     window.Online?.pageOpened();
   } else window.Online?.pageClosed();
 }
@@ -1599,7 +1603,7 @@ function showScreen(name, hash, { replace = false } = {}) {
 // Back to the Games screen; the game that was showing stops (it's saved).
 function goLobby({ replace = false } = {}) {
   if (S && location.hash) lastGameHash = location.hash;
-  for (const d of ["#results", "#room", "#setup"]) if ($(d).open) $(d).close();
+  for (const d of ["#results", "#room"]) if ($(d).open) $(d).close();
   cancelDrag();
   setSelection(null);
   if (S && !S.online) save();
@@ -1707,7 +1711,7 @@ function renderLocalGames() {
       }, "danger"], ["Open", () => openGame("local", g.id), "primary"]];
     ul.appendChild(row(names, sub, buttons, `#local=${g.id}` === lastGameHash ? "current" : ""));
   }
-  if (!games.length) ul.innerHTML = '<li class="empty">No games yet. Start one against the computer, or pass the phone around.</li>';
+  if (!games.length) ul.innerHTML = '<li class="empty">No local games yet.</li>';
   $("#local-sync-note").textContent = !$("#lobby-checking").hidden ? "" : window.Cloud?.signedIn()
     ? "Synced with your Google account, so they're on your other devices too."
     : "Sign in below to have these on your other devices too.";
@@ -1715,63 +1719,64 @@ function renderLocalGames() {
 
 // ---------------------------------------------------------------- dialogs
 
-function openSetup() {
+// The "New local game" form on the Games screen, laid out like "Create online
+// game": player count, how many are computers, their level, then names (only
+// with two or more people; one person is "You") and the turn timer (also only
+// with two or more people).
+let setupNames = []; // names typed for the people, kept while the counts change
+let setupOnLobby = false; // open the form when the Games screen next shows
+
+function openSetup(toggle = false) {
+  const form = $("#setup");
+  if (toggle && !form.hidden) { form.hidden = true; return; }
   const settings = loadSettings();
-  const box = $("#setup-players");
-  box.innerHTML = "";
-  for (const p of settings.players) addPlayerRow(p);
+  const people = settings.players.filter((p) => p.type === "human");
+  const computers = settings.players.filter((p) => p.type !== "human");
+  setupNames = people.length > 1 ? people.map((p) => p.name) : [];
+  $("#setup-players").value = String(Math.min(4, Math.max(2, settings.players.length)));
+  updateSetup();
+  $("#setup-ai").value = String(Math.min(computers.length, settings.players.length - 1));
+  $("#setup-level").value = computers[0]?.type === "easy" ? "easy" : "hard";
   $("#setup-timer").value = String(settings.timer);
-  $("#setup-cancel").hidden = false;
-  updateSetupButtons();
-  $("#setup").showModal();
+  updateSetup();
+  form.hidden = false;
+  form.scrollIntoView({ block: "nearest" });
 }
 
-function addPlayerRow(p) {
-  const row = document.createElement("div");
-  row.className = "prow";
-  row.innerHTML = `<input maxlength="14" placeholder="Name"><select>
-    <option value="human">Human</option><option value="easy">Computer (easy)</option><option value="hard">Computer (hard)</option>
-  </select><button type="button" class="rm" aria-label="Remove">×</button>`;
-  row.querySelector("input").value = p.name;
-  row.querySelector("select").value = p.type;
-  row.querySelector(".rm").onclick = () => { row.remove(); updateSetupButtons(); };
-  row.querySelector("select").onchange = updateSetupButtons;
-  $("#setup-players").appendChild(row);
-}
-
-function updateSetupButtons() {
-  const n = $("#setup-players").children.length;
-  // Games against the computer have no turn timer.
-  const humans = [...document.querySelectorAll("#setup-players select")].filter((s) => s.value === "human").length;
-  $("#setup-timer-row").hidden = humans < 2;
-  $("#add-player").hidden = n >= 4;
-  for (const b of document.querySelectorAll("#setup-players .rm")) b.style.visibility = n > 2 ? "" : "hidden";
-  // Names are only editable with two or more people; otherwise it's "You"
-  // against "Computer" (numbered when there are several computers).
-  const rows = [...document.querySelectorAll("#setup-players .prow")];
-  const computers = rows.filter((r) => r.querySelector("select").value !== "human");
-  for (const r of rows) {
-    const input = r.querySelector("input");
-    const wasLocked = input.disabled;
-    input.disabled = humans < 2;
-    if (humans >= 2) {
-      // Just unlocked: a person still called "Computer" gets a proper name.
-      if (wasLocked && r.querySelector("select").value === "human" && /^Computer( \d)?$/.test(input.value)) {
-        input.value = `Player ${rows.indexOf(r) + 1}`;
-      }
-      continue;
-    }
-    const c = computers.indexOf(r);
-    input.value = c < 0 ? "You" : computers.length > 1 ? `Computer ${c + 1}` : "Computer";
+function updateSetup() {
+  const total = Number($("#setup-players").value);
+  const ai = $("#setup-ai");
+  const keep = Math.min(Number(ai.value), total - 1);
+  ai.innerHTML = "";
+  for (let i = 0; i < total; i++) ai.add(new Option(String(i), String(i)));
+  ai.value = String(keep);
+  const humans = total - keep;
+  $("#setup-level-row").hidden = keep === 0;
+  $("#setup-timer-row").hidden = humans < 2; // no timer when only one person plays
+  $("#setup-names-row").hidden = humans < 2;
+  const box = $("#setup-names");
+  for (const [i, input] of [...box.querySelectorAll("input")].entries()) setupNames[i] = input.value;
+  box.innerHTML = "";
+  if (humans < 2) return;
+  for (let i = 0; i < humans; i++) {
+    const input = document.createElement("input");
+    input.maxLength = 14;
+    input.placeholder = `Player ${i + 1}`;
+    input.setAttribute("aria-label", `Player ${i + 1}'s name`);
+    input.value = setupNames[i] ?? "";
+    box.appendChild(input);
   }
 }
 
 function readSetup() {
-  const players = [...document.querySelectorAll("#setup-players .prow")].map((row, i) => {
-    const type = row.querySelector("select").value;
-    const name = row.querySelector("input").value.trim() || (type === "human" ? `Player ${i + 1}` : `Computer ${i + 1}`);
-    return { name, type };
-  });
+  const total = Number($("#setup-players").value);
+  const ai = Number($("#setup-ai").value);
+  const level = $("#setup-level").value;
+  const names = [...document.querySelectorAll("#setup-names input")].map((el, i) => el.value.trim() || `Player ${i + 1}`);
+  const players = [];
+  for (let i = 0; i < total - ai; i++) players.push({ name: total - ai > 1 ? names[i] : "You", type: "human" });
+  for (let i = 0; i < ai; i++) players.push({ name: ai > 1 ? `Computer ${i + 1}` : "Computer", type: level });
+  // Kept even with one person (it's ignored then) so it's remembered for next time.
   return { players, timer: Number($("#setup-timer").value) };
 }
 
@@ -1818,7 +1823,6 @@ function init() {
   $("#sort-num").onclick = () => sortRack("num");
   $("#sort-run").onclick = () => sortRack("run");
   $("#hud-home").onclick = (e) => { e.preventDefault(); goLobby(); };
-  $("#new-local").onclick = () => openSetup();
   $("#resign-btn").onclick = () => (S.online ? Online.resignCurrent() : resignLocal());
   $("#settings-btn").onclick = () => {
     $("#pref-fast").checked = prefs.fast;
@@ -1832,15 +1836,20 @@ function init() {
   $("#pref-fast").onchange = (e) => setPref("fast", e.target.checked);
   for (const r of document.querySelectorAll("input[name=pref-pickup]")) r.onchange = () => { setPref("pickup", r.value); setSelection(null); };
   for (const r of document.querySelectorAll("input[name=pref-move]")) r.onchange = () => { setPref("move", r.value); setSelection(null); showPickupSetting(); };
-  $("#add-player").onclick = () => { addPlayerRow({ name: "", type: "hard" }); updateSetupButtons(); };
-  $("#setup-cancel").onclick = () => $("#setup").close();
-  $("#setup-form").onsubmit = () => newGame(readSetup());
+  $("#new-local").onclick = () => openSetup(true);
+  $("#setup-players").onchange = updateSetup;
+  $("#setup-ai").onchange = updateSetup;
+  $("#setup").onsubmit = (e) => {
+    e.preventDefault();
+    $("#setup").hidden = true;
+    newGame(readSetup());
+  };
   $("#results-home").onclick = () => goLobby();
   $("#results-again").onclick = () => { $("#results").close(); newGame(S.settings); };
   $("#results-new").onclick = () => {
     $("#results").close();
-    if (S.online) goLobby();
-    else openSetup();
+    setupOnLobby = !S.online; // the form is on the Games screen
+    goLobby();
   };
   $("#cover-btn").onclick = () => {
     covered = false;
